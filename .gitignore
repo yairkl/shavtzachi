@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.pytest_cache/
+*.db
+*.db-journal
+
+# Node.js
+node_modules/
+dist/
+.env
+.env.local
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
+
+# Brain/Geminni artifacts (optional, keep if you want them in git)
+#.gemini/
