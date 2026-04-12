@@ -142,9 +142,21 @@ def solve_shift_assignment(shifts:List[Shift], soldiers:List[Soldier], history_s
         
         # Check previous assignments cooldown
         for pa in prev_by_soldier[soldier.id]:
+            if not pa.shift or not pa.shift.post:
+                # If post data is missing, we at least respect the shift duration for overlap protection
+                pa_end = pa.shift.end if pa.shift else datetime.min
+                for sid1 in sorted_sids:
+                    s1 = shift_map[sid1]
+                    if s1.start < pa_end and pa.shift.start < s1.end:
+                        for r1 in range(role_count[sid1]):
+                            if (sid1, soldier.id, r1) not in preassigned_pairs:
+                                model.Add(assignment_vars[(sid1, soldier.id, r1)] == 0)
+                continue
+
             pa_cooldown_limit = pa.shift.end + pa.shift.post.cooldown
             for sid1 in sorted_sids:
                 s1 = shift_map[sid1]
+                if not s1.post: continue
                 s1_cooldown_limit = s1.end + s1.post.cooldown
                 
                 if s1.start < pa_cooldown_limit and pa.shift.start < s1_cooldown_limit:

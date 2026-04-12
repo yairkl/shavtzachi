@@ -60,6 +60,7 @@ class Post(Base):
     end_time = Column(Time, nullable=False, default=lambda: time(5,59,0))
     cooldown = Column(Interval, nullable=False, default=lambda: timedelta(hours=0))
     intensity_weight = Column(Float, nullable=False, default=1.0)
+    is_active = Column(Integer, nullable=False, default=1)
     slots = relationship("PostTemplateSlot", back_populates="post", cascade="all, delete, delete-orphan")
 
 class PostTemplateSlot(Base):

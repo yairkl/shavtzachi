@@ -49,6 +49,7 @@ class PostCreate(BaseModel):
     cooldown_hours: int
     intensity_weight: float
     slots: List[str]
+    is_active: bool = True
 
 class AssignmentCreate(BaseModel):
     soldier_id: int
@@ -158,6 +159,7 @@ def get_posts(db: Session = Depends(get_db)):
         "end_time": p.end_time.strftime("%H:%M"),
         "cooldown_hours": p.cooldown.total_seconds() / 3600,
         "intensity_weight": p.intensity_weight,
+        "is_active": bool(p.is_active),
         "slots": [{"role_index": s.role_index, "skill": s.skill.name} for s in p.slots]
     } for p in posts]
 
@@ -169,7 +171,8 @@ def create_post(p_data: PostCreate, db: Session = Depends(get_db)):
         start_time=datetime.strptime(p_data.start_time, "%H:%M").time(),
         end_time=datetime.strptime(p_data.end_time, "%H:%M").time(),
         cooldown=timedelta(hours=p_data.cooldown_hours),
-        intensity_weight=p_data.intensity_weight
+        intensity_weight=p_data.intensity_weight,
+        is_active=1 if p_data.is_active else 0
     )
     for i, sk_name in enumerate(p_data.slots):
         skill = db.query(Skill).filter(Skill.name == sk_name).first()
@@ -187,6 +190,7 @@ def update_post(name: str, p_data: PostCreate, db: Session = Depends(get_db)):
     post.end_time = datetime.strptime(p_data.end_time, "%H:%M").time()
     post.cooldown = timedelta(hours=p_data.cooldown_hours)
     post.intensity_weight = p_data.intensity_weight
+    post.is_active = 1 if p_data.is_active else 0
     db.query(PostTemplateSlot).filter(PostTemplateSlot.post_name == name).delete()
     for i, sk_name in enumerate(p_data.slots):
         skill = db.query(Skill).filter(Skill.name == sk_name).first()
@@ -296,9 +300,9 @@ def get_schedule(start_date: datetime, end_date: datetime, db: Session = Depends
 @app.post("/schedule/draft")
 def draft_schedule(req: DraftRequest, db: Session = Depends(get_db)):
     try:
-        # Use joinedload to ensure all relationships are available without lazy loading issues in the solver
+        # Only draft for active posts
         soldiers = db.query(Soldier).options(joinedload(Soldier.skills), joinedload(Soldier.unavailabilities)).all()
-        posts = db.query(Post).options(joinedload(Post.slots).joinedload(PostTemplateSlot.skill)).all()
+        posts = db.query(Post).filter(Post.is_active == 1).options(joinedload(Post.slots).joinedload(PostTemplateSlot.skill)).all()
         
         # Normalize to naive datetimes
         start_naive = req.start_date.replace(tzinfo=None)
@@ -440,7 +444,8 @@ def check_manpower(start_date: datetime, end_date: datetime, db: Session = Depen
         end_naive = end_date.replace(tzinfo=None)
         
         # 1. Sustainability: How many soldiers of each skill do we need to sustain all posts?
-        posts = db.query(Post).options(joinedload(Post.slots).joinedload(PostTemplateSlot.skill)).all()
+        # Only consider active posts for manpower checking
+        posts = db.query(Post).filter(Post.is_active == 1).options(joinedload(Post.slots).joinedload(PostTemplateSlot.skill)).all()
         required_by_skill = defaultdict(float)
         
         for post in posts:

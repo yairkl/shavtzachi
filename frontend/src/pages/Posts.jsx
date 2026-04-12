@@ -35,7 +35,8 @@ export default function Posts() {
     end_time: "05:59",
     cooldown_hours: 0,
     intensity_weight: 1.0,
-    slots: ["soldier"]
+    slots: ["soldier"],
+    is_active: true
   });
   const fileInputRef = useRef(null);
 
@@ -89,7 +90,7 @@ export default function Posts() {
 
   const handleOpenAdd = () => {
     setEditingPost(null);
-    setFormData({ name: "", shift_length_hours: 4, start_time: "06:00", end_time: "05:59", cooldown_hours: 0, intensity_weight: 1.0, slots: [availableSkills[0] || ""] });
+    setFormData({ name: "", shift_length_hours: 4, start_time: "06:00", end_time: "05:59", cooldown_hours: 0, intensity_weight: 1.0, slots: [availableSkills[0] || ""], is_active: true });
     setIsDialogOpen(true);
   };
 
@@ -102,6 +103,7 @@ export default function Posts() {
         end_time: post.end_time,
         cooldown_hours: post.cooldown_hours,
         intensity_weight: post.intensity_weight,
+        is_active: post.is_active,
         slots: post.slots.sort((a,b) => a.role_index - b.role_index).map(s => s.skill)
     });
     setIsDialogOpen(true);
@@ -146,10 +148,13 @@ export default function Posts() {
         {loading ? (
             <div className="col-span-full text-center py-20 italic animate-pulse">Scanning post definitions...</div>
         ) : posts.map((post) => (
-            <Card key={post.name} className="glass flex flex-col border-none group relative overflow-hidden">
+            <Card key={post.name} className={cn("glass flex flex-col border-none group relative overflow-hidden transition-all duration-300", !post.is_active && "opacity-60 grayscale-[0.4]")}>
               <CardHeader className="pb-2">
                 <div className="flex justify-between items-start">
-                  <CardTitle className="text-xl font-bold">{post.name}</CardTitle>
+                  <div className="flex flex-col gap-1">
+                    <CardTitle className="text-xl font-bold">{post.name}</CardTitle>
+                    {!post.is_active && <Badge variant="outline" className="w-fit text-[9px] h-4 bg-muted text-muted-foreground uppercase font-black px-1.5 border-none">Inactive</Badge>}
+                  </div>
                   <Badge variant={post.intensity_weight > 1.2 ? "destructive" : "secondary"} className="font-mono text-[10px]">
                     W: {post.intensity_weight.toFixed(1)}
                   </Badge>
@@ -206,6 +211,16 @@ export default function Posts() {
                             <Label className="text-xs uppercase opacity-60 font-bold tracking-wider">Cooldown</Label>
                             <Input type="number" value={formData.cooldown_hours} onChange={e => setFormData(p => ({...p, cooldown_hours: parseInt(e.target.value)}))} className="bg-background/50 border-border" />
                         </div>
+                    </div>
+                    <div className="flex items-center gap-3 bg-background/30 p-2.5 rounded-lg border border-border/40">
+                        <Label className="text-xs uppercase opacity-80 font-bold flex-1 cursor-pointer" htmlFor="post-active-toggle">Enabled / Active</Label>
+                        <input 
+                            id="post-active-toggle"
+                            type="checkbox" 
+                            checked={formData.is_active} 
+                            onChange={e => setFormData(p => ({...p, is_active: e.target.checked}))}
+                            className="w-4 h-4 rounded border-border bg-background accent-primary cursor-pointer"
+                        />
                     </div>
                 </div>
                 <div className="space-y-4">
