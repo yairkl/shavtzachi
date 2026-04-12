@@ -6,7 +6,8 @@ import {
   Settings, 
   Calendar, 
   LayoutDashboard,
-  LogOut
+  LogOut,
+  CalendarX
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -16,6 +17,7 @@ const navItems = [
   { icon: Calendar, label: 'Scheduler', path: '/scheduler' },
   { icon: Users, label: 'Soldiers', path: '/soldiers' },
   { icon: Settings, label: 'Posts', path: '/posts' },
+  { icon: CalendarX, label: 'Unavailability', path: '/unavailability' },
 ];
 
 export default function Layout({ children }) {

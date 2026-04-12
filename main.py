@@ -2,8 +2,9 @@ from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func
 from database import engine, Session as DBSession
-from models import Soldier, Post, Shift, Assignment, Skill, PostTemplateSlot
+from models import Soldier, Post, Shift, Assignment, Skill, PostTemplateSlot, Unavailability
 from schedule import generate_shifts, solve_shift_assignment
 from pydantic import BaseModel, field_validator
 from typing import List, Optional
@@ -11,6 +12,7 @@ from datetime import datetime, timedelta
 import csv
 import io
 import logging
+from collections import defaultdict
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -64,21 +66,37 @@ class DraftRequest(BaseModel):
     start_date: datetime
     end_date: datetime
 
-def get_history_scores(db: Session):
+class UnavailabilityCreate(BaseModel):
+    soldier_id: int
+    start_datetime: datetime
+    end_datetime: datetime
+    reason: Optional[str] = None
+
+class UnavailabilityResponse(BaseModel):
+    id: int
+    soldier_id: int
+    soldier_name: str
+    start_datetime: datetime
+    end_datetime: datetime
+    reason: Optional[str]
+
+def get_history_scores(db: Session, exclude_from: Optional[datetime] = None):
     # Calculate sum of (end - start) * intensity_weight for each soldier
     # SQLite logic: (julianday(end) - julianday(start)) * 24 gives hours
-    from sqlalchemy import func
-    from models import Assignment, Shift, Post
-    
     # We query all assignments joined with shifts and posts
-    res = db.query(
+    query = db.query(
         Assignment.soldier_id,
         func.sum(
             (func.julianday(Shift.end) - func.julianday(Shift.start)) * 24 * Post.intensity_weight
         )
     ).join(Shift, Assignment.shift_id == Shift.id)\
-     .join(Post, Shift.post_name == Post.name)\
-     .group_by(Assignment.soldier_id).all()
+     .join(Post, Shift.post_name == Post.name)
+     
+    if exclude_from:
+        # Avoid double-counting assignments inside the new draft window
+        query = query.filter(Shift.start < exclude_from.replace(tzinfo=None))
+        
+    res = query.group_by(Assignment.soldier_id).all()
     
     return {r[0]: float(r[1]) if r[1] else 0.0 for r in res}
 
@@ -288,10 +306,24 @@ def draft_schedule(req: DraftRequest, db: Session = Depends(get_db)):
         
         shifts = generate_shifts(posts, start_naive, end_naive, session=None)
         
-        # Get dynamic history scores
-        history_scores = get_history_scores(db)
+        # Get dynamic history scores strictly prior to the drafting window
+        history_scores = get_history_scores(db, exclude_from=req.start_date)
             
-        assignments = solve_shift_assignment(shifts, soldiers, history_scores=history_scores)
+        # Consider a cooldown lookback of up to 7 days, evaluating everything up until window end 
+        lookback_date = start_naive - timedelta(days=7)
+        existing_assignments = db.query(Assignment).join(Shift).filter(
+            Shift.start >= lookback_date,
+            Shift.start < end_naive
+        ).options(
+            joinedload(Assignment.shift).joinedload(Shift.post),
+            joinedload(Assignment.soldier)
+        ).all()
+            
+        assignments = solve_shift_assignment(
+            shifts, soldiers, 
+            history_scores=history_scores, 
+            existing_assignments=existing_assignments
+        )
         if not assignments: return []
             
         return [{
@@ -344,6 +376,174 @@ def save_schedule(req: SaveScheduleRequest, db: Session = Depends(get_db)):
         logger.error(f"Save schedule error: {str(e)}")
         import traceback; traceback.print_exc()
         db.rollback(); 
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Endpoints: Unavailability ---
+
+@app.get("/unavailabilities", response_model=List[UnavailabilityResponse])
+def get_unavailabilities(db: Session = Depends(get_db)):
+    records = db.query(Unavailability).options(joinedload(Unavailability.soldier)).all()
+    return [{
+        "id": r.id,
+        "soldier_id": r.soldier_id,
+        "soldier_name": r.soldier.name,
+        "start_datetime": r.start_datetime,
+        "end_datetime": r.end_datetime,
+        "reason": r.reason
+    } for r in records]
+
+@app.post("/unavailabilities")
+def create_unavailability(u_data: UnavailabilityCreate, db: Session = Depends(get_db)):
+    # Check for overlapping unavailability for the same soldier
+    existing = db.query(Unavailability).filter(
+        Unavailability.soldier_id == u_data.soldier_id,
+        Unavailability.start_datetime < u_data.end_datetime.replace(tzinfo=None),
+        Unavailability.end_datetime > u_data.start_datetime.replace(tzinfo=None)
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Overlapping unavailability exists for this soldier")
+        
+    record = Unavailability(
+        soldier_id=u_data.soldier_id,
+        start_datetime=u_data.start_datetime.replace(tzinfo=None),
+        end_datetime=u_data.end_datetime.replace(tzinfo=None),
+        reason=u_data.reason
+    )
+    db.add(record)
+    db.commit()
+    return {"status": "success", "id": record.id}
+
+@app.put("/unavailabilities/{u_id}")
+def update_unavailability(u_id: int, u_data: UnavailabilityCreate, db: Session = Depends(get_db)):
+    record = db.query(Unavailability).filter(Unavailability.id == u_id).first()
+    if not record: raise HTTPException(status_code=404, detail="Unavailability not found")
+    
+    record.soldier_id = u_data.soldier_id
+    record.start_datetime = u_data.start_datetime.replace(tzinfo=None)
+    record.end_datetime = u_data.end_datetime.replace(tzinfo=None)
+    record.reason = u_data.reason
+    db.commit()
+    return {"status": "success"}
+
+@app.delete("/unavailabilities/{u_id}")
+def delete_unavailability(u_id: int, db: Session = Depends(get_db)):
+    record = db.query(Unavailability).filter(Unavailability.id == u_id).first()
+    if not record: raise HTTPException(status_code=404, detail="Unavailability not found")
+    db.delete(record)
+    db.commit()
+    return {"status": "success"}
+
+@app.get("/unavailabilities/check-manpower")
+def check_manpower(start_date: datetime, end_date: datetime, db: Session = Depends(get_db)):
+    try:
+        start_naive = start_date.replace(tzinfo=None)
+        end_naive = end_date.replace(tzinfo=None)
+        
+        # 1. Sustainability: How many soldiers of each skill do we need to sustain all posts?
+        posts = db.query(Post).options(joinedload(Post.slots).joinedload(PostTemplateSlot.skill)).all()
+        required_by_skill = defaultdict(float)
+        
+        for post in posts:
+            # (L + C) / L is the number of soldiers needed to cover one slot 24/7
+            l = post.shift_length.total_seconds() / 3600
+            c = post.cooldown.total_seconds() / 3600
+            ratio = (l + c) / l
+            
+            # Adjust ratio if post is not 24/7
+            # Calculate active hours per day
+            if post.start_time < post.end_time:
+                active_hours = (datetime.combine(datetime.min, post.end_time) - datetime.combine(datetime.min, post.start_time)).total_seconds() / 3600
+            else:
+                active_hours = 24 - (datetime.combine(datetime.min, post.start_time) - datetime.combine(datetime.min, post.end_time)).total_seconds() / 3600
+            
+            # The sustain ratio for a non-24/7 post is slightly different.
+            # If active 8h, shift 4h, cooldown 8h. 
+            # Needs 2 soldiers (one for first shift, one for second shift because of cooldown).
+            # Heuristic: ceil( (ActiveHours + Cooldown) / (ShiftLength + Cooldown) ) * slots? No.
+            # Let's stick to the 24/7 ratio as a baseline for "sustainable personnel" but scale it by active_hours/24
+            active_ratio = active_hours / 24.0
+            sustenance_needed = ratio * active_ratio
+            
+            for slot in post.slots:
+                required_by_skill[slot.skill.name] += sustenance_needed
+
+        # 2. Availability per day
+        soldiers = db.query(Soldier).options(joinedload(Soldier.skills), joinedload(Soldier.unavailabilities)).all()
+        skills = db.query(Skill).all()
+        all_skills = [sk.name for sk in skills]
+        
+        results = []
+        current_date = start_naive
+        
+        # If start and end are on the same day but different times, ensure at least one iteration
+        if current_date.date() == end_naive.date():
+             end_naive = current_date + timedelta(days=1)
+
+        while current_date.date() < end_naive.date():
+            day_start = datetime.combine(current_date.date(), datetime.min.time())
+            day_end = day_start + timedelta(days=1)
+            
+            total_pool_by_skill = defaultdict(int)
+            for s in soldiers:
+                for sk in s.skills:
+                    total_pool_by_skill[sk.name] += 1
+
+            # Identify all sub-intervals where availability might change
+            events = {day_start, day_end}
+            for s in soldiers:
+                for u in s.unavailabilities:
+                    if u.start_datetime < day_end and u.end_datetime > day_start:
+                        events.add(max(u.start_datetime, day_start))
+                        events.add(min(u.end_datetime, day_end))
+            
+            sorted_events = sorted(list(events))
+            min_available_by_skill = {sk_name: total_pool_by_skill[sk_name] for sk_name in all_skills}
+
+            for i in range(len(sorted_events) - 1):
+                start_int, end_int = sorted_events[i], sorted_events[i+1]
+                if start_int == end_int: continue
+                
+                # Check availability at the midpoint of this interval
+                mid = start_int + (end_int - start_int) / 2
+                current_avail = defaultdict(int)
+                
+                for s in soldiers:
+                    is_unavailable = False
+                    for u in s.unavailabilities:
+                        if u.start_datetime <= mid < u.end_datetime:
+                            is_unavailable = True
+                            break
+                    if not is_unavailable:
+                        for sk in s.skills:
+                            current_avail[sk.name] += 1
+                
+                for sk_name in all_skills:
+                    min_available_by_skill[sk_name] = min(min_available_by_skill[sk_name], current_avail[sk_name])
+
+            day_report = []
+            for sk_name in all_skills:
+                needed = required_by_skill.get(sk_name, 0.0)
+                available = min_available_by_skill[sk_name]
+                total = total_pool_by_skill[sk_name]
+                day_report.append({
+                    "skill": sk_name,
+                    "needed": round(needed, 2),
+                    "available": int(available),
+                    "total_pool": total,
+                    "status": "danger" if available < needed else ("warning" if available < needed * 1.5 else "success")
+                })
+                
+            results.append({
+                "date": current_date.isoformat(),
+                "report": day_report
+            })
+            
+            current_date += timedelta(days=1)
+            
+        return results
+    except Exception as e:
+        logger.error(f"Manpower check error: {e}")
+        import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

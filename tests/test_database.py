@@ -3,7 +3,7 @@ from database import Soldier, Skill, Post, PostTemplateSlot
 from datetime import timedelta, time
 
 def test_soldier_creation(db):
-    new_soldier = Soldier(name="Test Soldier", history_score=5.0)
+    new_soldier = Soldier(name="Test Soldier")
     db.add(new_soldier)
     db.commit()
     

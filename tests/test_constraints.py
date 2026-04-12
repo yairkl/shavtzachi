@@ -87,7 +87,7 @@ def test_unavailability_constraint(db, skill_guard):
     unavail = Unavailability(
         soldier=soldier, 
         start_datetime=datetime(2026, 1, 1, 1, 0), 
-        end_datetime=datetime(2026, 1, 1, 2, 0)
+        end_datetime=datetime(2026, 1, 1, 3, 0)
     )
     db.add(unavail)
     db.commit()
@@ -97,6 +97,10 @@ def test_unavailability_constraint(db, skill_guard):
     shifts = generate_shifts([post], start, end)
     for i, s in enumerate(shifts): s.id = i + 100
     
-    assignments = solve_shift_assignment(shifts, [soldier])
+    from sqlalchemy.orm import joinedload
+    soldier_with_unavail = db.query(Soldier).options(joinedload(Soldier.unavailabilities)).filter(Soldier.id == soldier.id).first()
+    
+    print("UNAVAILABILITIES:", soldier_with_unavail.unavailabilities)
+    assignments = solve_shift_assignment(shifts, [soldier_with_unavail])
     # Should be empty because shift overlaps with unavailability
     assert len(assignments) == 0

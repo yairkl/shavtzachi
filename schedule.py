@@ -7,6 +7,7 @@ from typing import List, Optional
 from ortools.sat.python import cp_model
 import itertools
 import logging
+from collections import defaultdict
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -49,13 +50,16 @@ def generate_shifts(posts, start_date, end_date, session=None):
     if session: session.commit()
     return shifts
 
-def solve_shift_assignment(shifts:List[Shift], soldiers:List[Soldier], history_scores: Optional[dict] = None):
+def solve_shift_assignment(shifts:List[Shift], soldiers:List[Soldier], history_scores: Optional[dict] = None, existing_assignments: Optional[List[Assignment]] = None):
     if not shifts or not soldiers: 
         logger.warning("No shifts or soldiers provided to solver.")
         return []
     
     if history_scores is None:
         history_scores = {s.id: 0.0 for s in soldiers}
+        
+    if existing_assignments is None:
+        existing_assignments = []
         
     model = cp_model.CpModel()
     
@@ -106,20 +110,58 @@ def solve_shift_assignment(shifts:List[Shift], soldiers:List[Soldier], history_s
             if q_count == 0:
                 logger.warning(f"CRITICAL: No one qualified for {shift.post_name} role {rid} ({req})")
 
-    # Overlap and Cooldown
+    # Handle Existing Assignments
+    ephemeral_lookup = {}
+    for sid, shift in shift_map.items():
+        ephemeral_lookup[(shift.post_name, shift.start.replace(microsecond=0))] = sid
+
+    boundary_assignments = []
+    preassigned_pairs = set()
+    
+    for pa in existing_assignments:
+        key = (pa.shift.post_name, pa.shift.start.replace(microsecond=0))
+        if key in ephemeral_lookup:
+            sid = ephemeral_lookup[key]
+            if pa.role_id < role_count[sid]:
+                # Force the solver to include this assignment
+                model.Add(assignment_vars[(sid, pa.soldier_id, pa.role_id)] == 1)
+                preassigned_pairs.add((sid, pa.soldier_id, pa.role_id))
+            else:
+                boundary_assignments.append(pa)
+        else:
+            boundary_assignments.append(pa)
+
+    # Overlap and Cooldown against boundary assignments
+    prev_by_soldier = defaultdict(list)
+    for pa in boundary_assignments:
+        prev_by_soldier[pa.soldier_id].append(pa)
+
     for soldier in soldiers:
         # Pre-filter shifts that are close in time
         sorted_sids = sorted(shift_map.keys(), key=lambda x: shift_map[x].start)
         
+        # Check previous assignments cooldown
+        for pa in prev_by_soldier[soldier.id]:
+            pa_cooldown_limit = pa.shift.end + pa.shift.post.cooldown
+            for sid1 in sorted_sids:
+                s1 = shift_map[sid1]
+                s1_cooldown_limit = s1.end + s1.post.cooldown
+                
+                if s1.start < pa_cooldown_limit and pa.shift.start < s1_cooldown_limit:
+                    for r1 in range(role_count[sid1]):
+                        if (sid1, soldier.id, r1) not in preassigned_pairs:
+                            model.Add(assignment_vars[(sid1, soldier.id, r1)] == 0)
+
         # Check unavailabilities
         for sid in sorted_sids:
             s1 = shift_map[sid]
             for u in soldier.unavailabilities:
                 if not (s1.end <= u.start_datetime or s1.start >= u.end_datetime):
                     for r1 in range(role_count[sid]):
-                        model.Add(assignment_vars[(sid, soldier.id, r1)] == 0)
+                        if (sid, soldier.id, r1) not in preassigned_pairs:
+                            model.Add(assignment_vars[(sid, soldier.id, r1)] == 0)
 
-        # Check overlaps and cooldowns
+        # Check overlaps and cooldowns within window
         for i, sid1 in enumerate(sorted_sids):
             s1 = shift_map[sid1]
             cooldown_limit = s1.end + s1.post.cooldown
@@ -129,11 +171,16 @@ def solve_shift_assignment(shifts:List[Shift], soldiers:List[Soldier], history_s
                 if s2.start < cooldown_limit:
                     for r1 in range(role_count[sid1]):
                         for r2 in range(role_count[sid2]):
-                            model.Add(assignment_vars[(sid1, soldier.id, r1)] + assignment_vars[(sid2, soldier.id, r2)] <= 1)
+                            # Limit to at most 1, unless the user manually preassigned both
+                            if (sid1, soldier.id, r1) not in preassigned_pairs or (sid2, soldier.id, r2) not in preassigned_pairs:
+                                model.Add(assignment_vars[(sid1, soldier.id, r1)] + assignment_vars[(sid2, soldier.id, r2)] <= 1)
                 else: break
 
     # Objective
     total_filled = sum(filled_role_vars.values())
+    
+    # Normalize history scores to keep variables small and prevent overflow
+    min_history = min([history_scores.get(s.id, 0.0) for s in soldiers]) if soldiers else 0.0
     
     loads = []
     for soldier in soldiers:
@@ -143,14 +190,19 @@ def solve_shift_assignment(shifts:List[Shift], soldiers:List[Soldier], history_s
             val = int((shift.end - shift.start).total_seconds() / 3600 * shift.post.intensity_weight * 10)
             for r in range(role_count[sid]):
                 work_parts.append(assignment_vars[(sid, soldier.id, r)] * val)
-        model.Add(load == int(history_scores.get(soldier.id, 0.0) * 10) + sum(work_parts))
+        
+        normalized_history = int((history_scores.get(soldier.id, 0.0) - min_history) * 10)
+        model.Add(load == normalized_history + sum(work_parts))
         loads.append(load)
 
-    max_load = model.NewIntVar(0, 10000000, "max_load")
-    model.AddMaxEquality(max_load, loads)
+    sum_load_sq = []
+    for soldier, load in zip(soldiers, loads):
+        load_sq = model.NewIntVar(0, 10000000000, f"load_sq_{soldier.id}")
+        model.AddMultiplicationEquality(load_sq, [load, load])
+        sum_load_sq.append(load_sq)
     
-    # Maximize filled roles primarily, then minimize variance (approx by minimizing max load)
-    model.Maximize(total_filled * 1000000 - max_load)
+    # Maximize filled roles primarily, then minimize variance (by minimizing sum of squares of loads)
+    model.Maximize(total_filled * 100000000 - sum(sum_load_sq))
     
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = 15.0
