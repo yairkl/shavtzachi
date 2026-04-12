@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from database import engine, Session
 from models import Post, Soldier, Shift, Assignment, Unavailability
-from typing import List, Optional
+from typing import List, Optional, Dict, Set, Tuple
 from ortools.sat.python import cp_model
 import itertools
 import logging
@@ -11,6 +11,10 @@ from collections import defaultdict
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Shift generation
+# ---------------------------------------------------------------------------
 
 def generate_shifts(posts, start_date, end_date, session=None):
     shifts = []
@@ -50,31 +54,43 @@ def generate_shifts(posts, start_date, end_date, session=None):
     if session: session.commit()
     return shifts
 
-def solve_shift_assignment(shifts:List[Shift], soldiers:List[Soldier], history_scores: Optional[dict] = None, existing_assignments: Optional[List[Assignment]] = None):
-    if not shifts or not soldiers: 
-        logger.warning("No shifts or soldiers provided to solver.")
-        return []
-    
-    if history_scores is None:
-        history_scores = {s.id: 0.0 for s in soldiers}
-        
-    if existing_assignments is None:
-        existing_assignments = []
-        
-    model = cp_model.CpModel()
-    
-    # Ensure all shifts have a unique ID for the model's dictionaries
-    # Use object ID if DB ID is missing
+# ---------------------------------------------------------------------------
+# Solver — helper types
+# ---------------------------------------------------------------------------
+
+class _SolverContext:
+    """Bundles all shared state for the constraint-building helpers."""
+    def __init__(self, model, shift_map, role_count, soldiers, assignment_vars, filled_role_vars):
+        self.model = model
+        self.shift_map = shift_map
+        self.role_count = role_count
+        self.soldiers = soldiers
+        self.assignment_vars = assignment_vars
+        self.filled_role_vars = filled_role_vars
+        self.preassigned_pairs: Set[Tuple[int, int, int]] = set()
+        self.sorted_sids = sorted(shift_map.keys(), key=lambda x: shift_map[x].start)
+
+# ---------------------------------------------------------------------------
+# Solver — step 1: build shift map & decision variables
+# ---------------------------------------------------------------------------
+
+def _build_shift_map(shifts: List[Shift]):
+    """Create a mapping of unique IDs to shifts, and per-shift role counts."""
     shift_map = {}
     for i, s in enumerate(shifts):
         sid = s.id if s.id is not None else (100000 + i)
         shift_map[sid] = s
-        
     role_count = {sid: len(s.post.slots) for sid, s in shift_map.items()}
-    qualifications = {s.id: set([sk.name for sk in s.skills]) for s in soldiers}
-    
-    logger.info(f"Building model: {len(shifts)} shifts, {len(soldiers)} soldiers.")
-    
+    return shift_map, role_count
+
+
+def _create_decision_variables(model, shift_map, role_count, soldiers):
+    """Create the core assignment and role-filled boolean variables.
+
+    Returns:
+        assignment_vars:  dict[(shift_id, soldier_id, role_id)] → BoolVar
+        filled_role_vars: dict[(shift_id, role_id)] → BoolVar
+    """
     assignment_vars = {}
     filled_role_vars = {}
 
@@ -90,146 +106,487 @@ def solve_shift_assignment(shifts:List[Shift], soldiers:List[Soldier], history_s
                 soldier_vars.append(v)
             model.Add(sum(soldier_vars) == role_filled)
 
-    # Constraint: Soldier once per shift
-    for sid, shift in shift_map.items():
+    # Each soldier can fill at most one role per shift
+    for sid in shift_map:
         for soldier in soldiers:
             model.Add(sum(assignment_vars[(sid, soldier.id, r)] for r in range(role_count[sid])) <= 1)
 
-    # Qualification Constraint
-    for sid, shift in shift_map.items():
-        # Slots might be lazy loaded, ensure access is safe
+    return assignment_vars, filled_role_vars
+
+# ---------------------------------------------------------------------------
+# Solver — step 2: skill qualification constraints
+# ---------------------------------------------------------------------------
+
+def _add_skill_constraints(ctx: _SolverContext):
+    """Prevent soldiers from being assigned to roles they are not qualified for."""
+    qualifications = {s.id: {sk.name for sk in s.skills} for s in ctx.soldiers}
+    
+    for sid, shift in ctx.shift_map.items():
         for slot in shift.post.slots:
             rid = slot.role_index
             req = slot.skill.name
             q_count = 0
-            for soldier in soldiers:
+            for soldier in ctx.soldiers:
                 if req not in qualifications[soldier.id]:
-                    model.Add(assignment_vars[(sid, soldier.id, rid)] == 0)
+                    ctx.model.Add(ctx.assignment_vars[(sid, soldier.id, rid)] == 0)
                 else:
                     q_count += 1
             if q_count == 0:
                 logger.warning(f"CRITICAL: No one qualified for {shift.post_name} role {rid} ({req})")
 
-    # Handle Existing Assignments
+# ---------------------------------------------------------------------------
+# Solver — step 3: handle existing / pre-assigned shifts
+# ---------------------------------------------------------------------------
+
+def _process_existing_assignments(ctx: _SolverContext, existing_assignments: List[Assignment]):
+    """Pin already-committed assignments and identify boundary assignments
+    (those outside the current window) for cooldown enforcement.
+
+    Returns:
+        boundary_assignments: assignments that fall outside the current shift window.
+    """
     ephemeral_lookup = {}
-    for sid, shift in shift_map.items():
+    for sid, shift in ctx.shift_map.items():
         ephemeral_lookup[(shift.post_name, shift.start.replace(microsecond=0))] = sid
 
     boundary_assignments = []
-    preassigned_pairs = set()
-    
+
     for pa in existing_assignments:
         key = (pa.shift.post_name, pa.shift.start.replace(microsecond=0))
         if key in ephemeral_lookup:
             sid = ephemeral_lookup[key]
-            if pa.role_id < role_count[sid]:
+            if pa.role_id < ctx.role_count[sid]:
                 # Force the solver to include this assignment
-                model.Add(assignment_vars[(sid, pa.soldier_id, pa.role_id)] == 1)
-                preassigned_pairs.add((sid, pa.soldier_id, pa.role_id))
+                ctx.model.Add(ctx.assignment_vars[(sid, pa.soldier_id, pa.role_id)] == 1)
+                ctx.preassigned_pairs.add((sid, pa.soldier_id, pa.role_id))
             else:
                 boundary_assignments.append(pa)
         else:
             boundary_assignments.append(pa)
 
-    # Overlap and Cooldown against boundary assignments
+    return boundary_assignments
+
+# ---------------------------------------------------------------------------
+# Solver — step 4: temporal constraints (cooldown, overlap, unavailability)
+# ---------------------------------------------------------------------------
+
+def _add_temporal_constraints(ctx: _SolverContext, boundary_assignments: List[Assignment]):
+    """Add cooldown, overlap, and unavailability constraints for each soldier."""
     prev_by_soldier = defaultdict(list)
     for pa in boundary_assignments:
         prev_by_soldier[pa.soldier_id].append(pa)
 
-    for soldier in soldiers:
-        # Pre-filter shifts that are close in time
-        sorted_sids = sorted(shift_map.keys(), key=lambda x: shift_map[x].start)
-        
-        # Check previous assignments cooldown
-        for pa in prev_by_soldier[soldier.id]:
-            if not pa.shift or not pa.shift.post:
-                # If post data is missing, we at least respect the shift duration for overlap protection
-                pa_end = pa.shift.end if pa.shift else datetime.min
-                for sid1 in sorted_sids:
-                    s1 = shift_map[sid1]
-                    if s1.start < pa_end and pa.shift.start < s1.end:
-                        for r1 in range(role_count[sid1]):
-                            if (sid1, soldier.id, r1) not in preassigned_pairs:
-                                model.Add(assignment_vars[(sid1, soldier.id, r1)] == 0)
+    for soldier in ctx.soldiers:
+        _add_boundary_cooldowns(ctx, soldier, prev_by_soldier[soldier.id])
+        _add_unavailability_constraints(ctx, soldier)
+        _add_intra_window_cooldowns(ctx, soldier)
+
+
+def _add_boundary_cooldowns(ctx, soldier, prev_assignments):
+    """Prevent assignment to shifts that conflict with boundary (pre-window) assignments."""
+    for pa in prev_assignments:
+        if not pa.shift or not pa.shift.post:
+            pa_end = pa.shift.end if pa.shift else datetime.min
+            for sid1 in ctx.sorted_sids:
+                s1 = ctx.shift_map[sid1]
+                if s1.start < pa_end and pa.shift.start < s1.end:
+                    for r1 in range(ctx.role_count[sid1]):
+                        if (sid1, soldier.id, r1) not in ctx.preassigned_pairs:
+                            ctx.model.Add(ctx.assignment_vars[(sid1, soldier.id, r1)] == 0)
+            continue
+
+        pa_cooldown_limit = pa.shift.end + pa.shift.post.cooldown
+        for sid1 in ctx.sorted_sids:
+            s1 = ctx.shift_map[sid1]
+            if not s1.post: continue
+            s1_cooldown_limit = s1.end + s1.post.cooldown
+            
+            if s1.start < pa_cooldown_limit and pa.shift.start < s1_cooldown_limit:
+                for r1 in range(ctx.role_count[sid1]):
+                    if (sid1, soldier.id, r1) not in ctx.preassigned_pairs:
+                        ctx.model.Add(ctx.assignment_vars[(sid1, soldier.id, r1)] == 0)
+
+
+def _add_unavailability_constraints(ctx, soldier):
+    """Prevent assignment during the soldier's unavailability windows."""
+    for sid in ctx.sorted_sids:
+        s1 = ctx.shift_map[sid]
+        for u in soldier.unavailabilities:
+            if not (s1.end <= u.start_datetime or s1.start >= u.end_datetime):
+                for r1 in range(ctx.role_count[sid]):
+                    if (sid, soldier.id, r1) not in ctx.preassigned_pairs:
+                        ctx.model.Add(ctx.assignment_vars[(sid, soldier.id, r1)] == 0)
+
+
+def _add_intra_window_cooldowns(ctx, soldier):
+    """Prevent two shifts from being assigned to the same soldier when they
+    are closer than the cooldown period of either shift's post."""
+    for i, sid1 in enumerate(ctx.sorted_sids):
+        s1 = ctx.shift_map[sid1]
+        cooldown_limit = s1.end + s1.post.cooldown
+        for j in range(i + 1, len(ctx.sorted_sids)):
+            sid2 = ctx.sorted_sids[j]
+            s2 = ctx.shift_map[sid2]
+            if s2.start < cooldown_limit:
+                for r1 in range(ctx.role_count[sid1]):
+                    for r2 in range(ctx.role_count[sid2]):
+                        if (sid1, soldier.id, r1) not in ctx.preassigned_pairs or (sid2, soldier.id, r2) not in ctx.preassigned_pairs:
+                            ctx.model.Add(ctx.assignment_vars[(sid1, soldier.id, r1)] + ctx.assignment_vars[(sid2, soldier.id, r2)] <= 1)
+            else:
+                break
+
+# ---------------------------------------------------------------------------
+# Solver — step 5: daily spread (intra-day fairness)
+# ---------------------------------------------------------------------------
+
+def _add_daily_spread_terms(ctx: _SolverContext):
+    """Penalize uneven shift distribution within each calendar day.
+
+    Returns:
+        daily_spreads: list of IntVars, one per day, representing the 
+                       max-min shift count gap across soldiers for that day.
+    """
+    shifts_by_day = defaultdict(list)
+    for sid, shift in ctx.shift_map.items():
+        shifts_by_day[shift.start.date()].append(sid)
+    
+    daily_spreads = []
+    max_daily_shifts = max(len(sids) for sids in shifts_by_day.values()) if shifts_by_day else 1
+
+    for day_key, day_sids in shifts_by_day.items():
+        day_counts = []
+        for soldier in ctx.soldiers:
+            cnt = ctx.model.NewIntVar(0, max_daily_shifts, f"dcnt_{soldier.id}_{day_key}")
+            parts = []
+            for sid in day_sids:
+                for r in range(ctx.role_count[sid]):
+                    parts.append(ctx.assignment_vars[(sid, soldier.id, r)])
+            ctx.model.Add(cnt == sum(parts))
+            day_counts.append(cnt)
+
+        day_max = ctx.model.NewIntVar(0, max_daily_shifts, f"dmax_{day_key}")
+        day_min = ctx.model.NewIntVar(0, max_daily_shifts, f"dmin_{day_key}")
+        ctx.model.AddMaxEquality(day_max, day_counts)
+        ctx.model.AddMinEquality(day_min, day_counts)
+        day_spread = ctx.model.NewIntVar(0, max_daily_shifts, f"dspread_{day_key}")
+        ctx.model.Add(day_spread == day_max - day_min)
+        daily_spreads.append(day_spread)
+
+    return daily_spreads
+
+# ---------------------------------------------------------------------------
+# Solver — step 6: rest-time optimization (spacing & rest-fairness)
+# ---------------------------------------------------------------------------
+
+REST_WINDOW_HOURS = 48
+
+def _add_rest_optimization_terms(ctx: _SolverContext):
+    """Maximize rest between consecutive shifts and ensure rest-fairness
+    across soldiers.
+
+    Creates per-soldier aggregate shift variables, proximity penalties,
+    and minimum-rest tracking.
+
+    Returns:
+        overall_min_rest: IntVar — worst-case minimum rest across all soldiers.
+        max_prox:         IntVar — highest per-soldier proximity penalty.
+        min_rest_vars:    list of IntVars — per-soldier minimum rest gap.
+        max_gap:          int   — upper bound used for min_rest scaling.
+    """
+    model = ctx.model
+
+    # Per-soldier aggregate shift vars (is soldier assigned to this shift?)
+    soldier_in_shift = {}
+    for sid in ctx.shift_map:
+        for soldier in ctx.soldiers:
+            sv = model.NewBoolVar(f"sa_{sid}_{soldier.id}")
+            model.Add(sv == sum(ctx.assignment_vars[(sid, soldier.id, r)] for r in range(ctx.role_count[sid])))
+            soldier_in_shift[(sid, soldier.id)] = sv
+
+    # Upper bound for rest gaps (tenths of hours)
+    if len(ctx.sorted_sids) >= 2:
+        max_gap = int((ctx.shift_map[ctx.sorted_sids[-1]].start - ctx.shift_map[ctx.sorted_sids[0]].end).total_seconds() / 360)
+    else:
+        max_gap = REST_WINDOW_HOURS * 10
+    max_gap = max(max_gap, 1)
+
+    min_rest_vars = []
+    soldier_prox_penalties = []
+
+    for soldier in ctx.soldiers:
+        min_rest, prox_var = _build_soldier_rest_terms(
+            ctx, soldier, soldier_in_shift, max_gap
+        )
+        min_rest_vars.append(min_rest)
+        if prox_var is not None:
+            soldier_prox_penalties.append(prox_var)
+
+    # Overall min rest — worst-case across soldiers
+    overall_min_rest = model.NewIntVar(0, max_gap, "overall_min_rest")
+    if min_rest_vars:
+        model.AddMinEquality(overall_min_rest, min_rest_vars)
+
+    # Max per-soldier proximity — minimize for fair burden distribution
+    prox_bound = REST_WINDOW_HOURS * 10 * len(ctx.sorted_sids)
+    if soldier_prox_penalties:
+        max_prox = model.NewIntVar(0, prox_bound, "max_prox")
+        model.AddMaxEquality(max_prox, soldier_prox_penalties)
+    else:
+        max_prox = model.NewIntVar(0, 0, "max_prox")
+
+    return overall_min_rest, max_prox, min_rest_vars, max_gap
+
+
+def _build_soldier_rest_terms(ctx, soldier, soldier_in_shift, max_gap):
+    """Build min-rest and proximity penalty terms for a single soldier.
+
+    Returns:
+        min_rest:  IntVar — minimum rest gap for this soldier (tenths of hours).
+        prox_var:  IntVar or None — total proximity penalty for this soldier.
+    """
+    model = ctx.model
+    min_rest = model.NewIntVar(0, max_gap, f"minrest_{soldier.id}")
+    has_pair = False
+    prox_parts = []
+
+    for i in range(len(ctx.sorted_sids)):
+        sid1 = ctx.sorted_sids[i]
+        s1 = ctx.shift_map[sid1]
+
+        for j in range(i + 1, len(ctx.sorted_sids)):
+            sid2 = ctx.sorted_sids[j]
+            s2 = ctx.shift_map[sid2]
+
+            gap_seconds = (s2.start - s1.end).total_seconds()
+            gap_hours = gap_seconds / 3600
+
+            if gap_hours >= REST_WINDOW_HOURS:
+                break
+            if gap_seconds < 0:
                 continue
 
-            pa_cooldown_limit = pa.shift.end + pa.shift.post.cooldown
-            for sid1 in sorted_sids:
-                s1 = shift_map[sid1]
-                if not s1.post: continue
-                s1_cooldown_limit = s1.end + s1.post.cooldown
-                
-                if s1.start < pa_cooldown_limit and pa.shift.start < s1_cooldown_limit:
-                    for r1 in range(role_count[sid1]):
-                        if (sid1, soldier.id, r1) not in preassigned_pairs:
-                            model.Add(assignment_vars[(sid1, soldier.id, r1)] == 0)
+            penalty = int((REST_WINDOW_HOURS - gap_hours) * 10)
+            if penalty <= 0:
+                continue
 
-        # Check unavailabilities
-        for sid in sorted_sids:
-            s1 = shift_map[sid]
-            for u in soldier.unavailabilities:
-                if not (s1.end <= u.start_datetime or s1.start >= u.end_datetime):
-                    for r1 in range(role_count[sid]):
-                        if (sid, soldier.id, r1) not in preassigned_pairs:
-                            model.Add(assignment_vars[(sid, soldier.id, r1)] == 0)
+            # "Both shifts assigned to this soldier"
+            both = model.NewBoolVar(f"both_{soldier.id}_{sid1}_{sid2}")
+            sv1 = soldier_in_shift[(sid1, soldier.id)]
+            sv2 = soldier_in_shift[(sid2, soldier.id)]
+            model.AddBoolAnd([sv1, sv2]).OnlyEnforceIf(both)
+            model.AddBoolOr([sv1.Not(), sv2.Not()]).OnlyEnforceIf(both.Not())
 
-        # Check overlaps and cooldowns within window
-        for i, sid1 in enumerate(sorted_sids):
-            s1 = shift_map[sid1]
-            cooldown_limit = s1.end + s1.post.cooldown
-            for j in range(i + 1, len(sorted_sids)):
-                sid2 = sorted_sids[j]
-                s2 = shift_map[sid2]
-                if s2.start < cooldown_limit:
-                    for r1 in range(role_count[sid1]):
-                        for r2 in range(role_count[sid2]):
-                            # Limit to at most 1, unless the user manually preassigned both
-                            if (sid1, soldier.id, r1) not in preassigned_pairs or (sid2, soldier.id, r2) not in preassigned_pairs:
-                                model.Add(assignment_vars[(sid1, soldier.id, r1)] + assignment_vars[(sid2, soldier.id, r2)] <= 1)
-                else: break
+            prox_parts.append(both * penalty)
 
-    # Objective
-    total_filled = sum(filled_role_vars.values())
-    
-    # Normalize history scores to keep variables small and prevent overflow
-    min_history = min([history_scores.get(s.id, 0.0) for s in soldiers]) if soldiers else 0.0
-    
+            gap_scaled = int(gap_seconds / 360)  # tenths of hours
+            model.Add(min_rest <= gap_scaled).OnlyEnforceIf(both)
+            has_pair = True
+
+    if not has_pair:
+        model.Add(min_rest == max_gap)
+
+    prox_var = None
+    if prox_parts:
+        prox_var = model.NewIntVar(0, REST_WINDOW_HOURS * 10 * len(ctx.sorted_sids), f"prox_{soldier.id}")
+        model.Add(prox_var == sum(prox_parts))
+
+    return min_rest, prox_var
+
+# ---------------------------------------------------------------------------
+# Solver — step 7: multi-tier fairness objective
+# ---------------------------------------------------------------------------
+
+def _build_objective(ctx: _SolverContext, shifts, daily_spreads, overall_min_rest,
+                     max_prox, min_rest_vars, max_gap, history_scores):
+    """Assemble and register the multi-tier objective function.
+
+    Priority hierarchy (each tier dominates the ones below):
+      1. Maximize filled roles
+      2. Minimize shift-count spread (count fairness)
+      3. Minimize daily spread (intra-day fairness)
+      4. Maximize overall min rest (rest-fairness)
+      5. Maximize per-soldier min rest (push to true values)
+      6. Minimize max per-soldier proximity (fair close-shift burden)
+      7. Minimize sum-of-squared weighted loads (history-aware variance)
+    """
+    model = ctx.model
+    total_filled = sum(ctx.filled_role_vars.values())
+
+    # Shift-count spread
+    shift_counts = []
+    for soldier in ctx.soldiers:
+        cnt = model.NewIntVar(0, len(shifts) * 3, f"cnt_{soldier.id}")
+        parts = [ctx.assignment_vars[(sid, soldier.id, r)]
+                 for sid in ctx.shift_map for r in range(ctx.role_count[sid])]
+        model.Add(cnt == sum(parts))
+        shift_counts.append(cnt)
+
+    max_shifts_var = model.NewIntVar(0, len(shifts) * 3, "max_shifts")
+    min_shifts_var = model.NewIntVar(0, len(shifts) * 3, "min_shifts")
+    model.AddMaxEquality(max_shifts_var, shift_counts)
+    model.AddMinEquality(min_shifts_var, shift_counts)
+    spread = model.NewIntVar(0, len(shifts) * 3, "spread")
+    model.Add(spread == max_shifts_var - min_shifts_var)
+
+    # History-aware weighted loads
+    min_history = min(history_scores.get(s.id, 0.0) for s in ctx.soldiers) if ctx.soldiers else 0.0
     loads = []
-    for soldier in soldiers:
+    for soldier in ctx.soldiers:
         load = model.NewIntVar(0, 10000000, f"load_{soldier.id}")
         work_parts = []
-        for sid, shift in shift_map.items():
+        for sid, shift in ctx.shift_map.items():
             val = int((shift.end - shift.start).total_seconds() / 3600 * shift.post.intensity_weight * 10)
-            for r in range(role_count[sid]):
-                work_parts.append(assignment_vars[(sid, soldier.id, r)] * val)
-        
+            for r in range(ctx.role_count[sid]):
+                work_parts.append(ctx.assignment_vars[(sid, soldier.id, r)] * val)
         normalized_history = int((history_scores.get(soldier.id, 0.0) - min_history) * 10)
         model.Add(load == normalized_history + sum(work_parts))
         loads.append(load)
 
     sum_load_sq = []
-    for soldier, load in zip(soldiers, loads):
+    for soldier, load in zip(ctx.soldiers, loads):
         load_sq = model.NewIntVar(0, 10000000000, f"load_sq_{soldier.id}")
         model.AddMultiplicationEquality(load_sq, [load, load])
         sum_load_sq.append(load_sq)
-    
-    # Maximize filled roles primarily, then minimize variance (by minimizing sum of squares of loads)
-    model.Maximize(total_filled * 100000000 - sum(sum_load_sq))
-    
+
+    # Dynamic weight scaling — ensures each tier strictly dominates the next
+    n = max(len(ctx.soldiers), 1)
+    g = max(max_gap, 1)
+
+    MIN_REST_WEIGHT = 100
+    OVERALL_REST_W  = 1000
+    MAX_PROX_WEIGHT = 50
+
+    max_rest_contribution = (n * g * MIN_REST_WEIGHT
+                             + g * OVERALL_REST_W
+                             + REST_WINDOW_HOURS * 10 * len(ctx.sorted_sids) * MAX_PROX_WEIGHT)
+    DAILY_SPREAD_W = max_rest_contribution + 1
+    SPREAD_WEIGHT  = DAILY_SPREAD_W * (len(shifts) + 1)
+    FILL_WEIGHT    = SPREAD_WEIGHT * (len(shifts) + 1)
+
+    # Assemble weighted terms
+    obj_terms = [total_filled, spread, max_prox, overall_min_rest] + daily_spreads + min_rest_vars + sum_load_sq
+    obj_weights = (
+        [FILL_WEIGHT, -SPREAD_WEIGHT, -MAX_PROX_WEIGHT, OVERALL_REST_W]
+        + [-DAILY_SPREAD_W] * len(daily_spreads)
+        + [MIN_REST_WEIGHT] * len(min_rest_vars)
+        + [-1] * len(sum_load_sq)
+    )
+    model.Maximize(cp_model.LinearExpr.WeightedSum(obj_terms, obj_weights))
+
+# ---------------------------------------------------------------------------
+# Solver — step 8: extract and log results
+# ---------------------------------------------------------------------------
+
+def _extract_results(solver, ctx: _SolverContext):
+    """Read the solved assignment values and build Assignment objects.
+    Also logs fairness and rest statistics."""
+    results = []
+    for sid, shift in ctx.shift_map.items():
+        for soldier in ctx.soldiers:
+            for r in range(ctx.role_count[sid]):
+                if solver.Value(ctx.assignment_vars[(sid, soldier.id, r)]):
+                    results.append(Assignment(
+                        soldier=soldier, soldier_id=soldier.id,
+                        shift=shift, shift_id=shift.id, role_id=r
+                    ))
+
+    _log_fairness_stats(results, ctx.soldiers)
+    _log_rest_stats(results)
+
+    logger.info(f"Found {len(results)} assignments.")
+    return results
+
+
+def _log_fairness_stats(results, soldiers):
+    """Log shift-count distribution across soldiers."""
+    final_counts = defaultdict(int)
+    for a in results:
+        final_counts[a.soldier_id] += 1
+    if final_counts:
+        counts = list(final_counts.values())
+        idle = len(soldiers) - len(final_counts)
+        logger.info(f"Fairness stats: assigned={len(final_counts)}/{len(soldiers)} soldiers, "
+                    f"shifts/soldier: min={min(counts)}, max={max(counts)}, "
+                    f"idle={idle}, spread={max(counts)-min(counts) if counts else 0}")
+
+
+def _log_rest_stats(results):
+    """Log minimum rest gap statistics per soldier."""
+    soldier_shifts = defaultdict(list)
+    for a in results:
+        soldier_shifts[a.soldier_id].append(a.shift)
+    rest_gaps = {}
+    for s_id, s_shifts in soldier_shifts.items():
+        sorted_s = sorted(s_shifts, key=lambda x: x.start)
+        if len(sorted_s) >= 2:
+            gaps = [(sorted_s[i+1].start - sorted_s[i].end).total_seconds() / 3600
+                    for i in range(len(sorted_s) - 1)]
+            rest_gaps[s_id] = min(gaps)
+        else:
+            rest_gaps[s_id] = float('inf')
+    finite_rests = [v for v in rest_gaps.values() if v != float('inf')]
+    if finite_rests:
+        logger.info(f"Rest stats: min_rest={min(finite_rests):.1f}h, "
+                    f"max_min_rest={max(finite_rests):.1f}h, "
+                    f"avg_min_rest={sum(finite_rests)/len(finite_rests):.1f}h")
+
+# ---------------------------------------------------------------------------
+# Public API — main solver entry point
+# ---------------------------------------------------------------------------
+
+def solve_shift_assignment(shifts: List[Shift], soldiers: List[Soldier],
+                           history_scores: Optional[dict] = None,
+                           existing_assignments: Optional[List[Assignment]] = None):
+    """Assign soldiers to shifts using constraint optimization.
+
+    Optimises for:
+      - Filling all roles
+      - Fair shift-count distribution
+      - Daily spread evenness
+      - Maximised and fair rest between shifts
+      - History-aware load balancing
+    """
+    if not shifts or not soldiers:
+        logger.warning("No shifts or soldiers provided to solver.")
+        return []
+
+    if history_scores is None:
+        history_scores = {s.id: 0.0 for s in soldiers}
+    if existing_assignments is None:
+        existing_assignments = []
+
+    # --- Build model ---
+    model = cp_model.CpModel()
+    shift_map, role_count = _build_shift_map(shifts)
+
+    logger.info(f"Building model: {len(shifts)} shifts, {len(soldiers)} soldiers.")
+
+    assignment_vars, filled_role_vars = _create_decision_variables(model, shift_map, role_count, soldiers)
+
+    ctx = _SolverContext(model, shift_map, role_count, soldiers, assignment_vars, filled_role_vars)
+
+    # --- Add constraints ---
+    _add_skill_constraints(ctx)
+
+    boundary_assignments = _process_existing_assignments(ctx, existing_assignments)
+
+    _add_temporal_constraints(ctx, boundary_assignments)
+
+    # --- Build objective components ---
+    daily_spreads = _add_daily_spread_terms(ctx)
+
+    overall_min_rest, max_prox, min_rest_vars, max_gap = _add_rest_optimization_terms(ctx)
+
+    _build_objective(ctx, shifts, daily_spreads, overall_min_rest,
+                     max_prox, min_rest_vars, max_gap, history_scores)
+
+    # --- Solve ---
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 15.0
+    solver.parameters.max_time_in_seconds = 30.0
     status = solver.Solve(model)
     logger.info(f"Solver finished: {solver.StatusName(status)}")
 
     if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-        results = []
-        for sid, shift in shift_map.items():
-            for soldier in soldiers:
-                for r in range(role_count[sid]):
-                    if solver.Value(assignment_vars[(sid, soldier.id, r)]):
-                        # Result objects must point to the original objects
-                        results.append(Assignment(soldier=soldier, soldier_id=soldier.id, shift=shift, shift_id=shift.id, role_id=r))
-        logger.info(f"Found {len(results)} assignments.")
-        return results
-        
+        return _extract_results(solver, ctx)
+
     return []
