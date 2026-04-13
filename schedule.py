@@ -69,6 +69,7 @@ class _SolverContext:
         self.filled_role_vars = filled_role_vars
         self.preassigned_pairs: Set[Tuple[int, int, int]] = set()
         self.sorted_sids = sorted(shift_map.keys(), key=lambda x: shift_map[x].start)
+        self.cooldown_violations: List[cp_model.BoolVar] = []
 
 # ---------------------------------------------------------------------------
 # Solver — step 1: build shift map & decision variables
@@ -96,7 +97,9 @@ def _create_decision_variables(model, shift_map, role_count, soldiers):
 
     for sid, shift in shift_map.items():
         for role_id in range(role_count[sid]):
+            # Every role MUST be filled (hard constraint)
             role_filled = model.NewBoolVar(f"filled_{sid}_{role_id}")
+            model.Add(role_filled == 1)
             filled_role_vars[(sid, role_id)] = role_filled
             
             soldier_vars = []
@@ -183,9 +186,14 @@ def _add_temporal_constraints(ctx: _SolverContext, boundary_assignments: List[As
 
 
 def _add_boundary_cooldowns(ctx, soldier, prev_assignments):
-    """Prevent assignment to shifts that conflict with boundary (pre-window) assignments."""
+    """Handle conflicts with assignments that fall outside the current shift window.
+    
+    Direct time overlaps are HARD constraints.
+    Cooldown violations are SOFT constraints.
+    """
     for pa in prev_assignments:
         if not pa.shift or not pa.shift.post:
+            # Basic overlap-only check for legacy/partial data
             pa_end = pa.shift.end if pa.shift else datetime.min
             for sid1 in ctx.sorted_sids:
                 s1 = ctx.shift_map[sid1]
@@ -195,16 +203,31 @@ def _add_boundary_cooldowns(ctx, soldier, prev_assignments):
                             ctx.model.Add(ctx.assignment_vars[(sid1, soldier.id, r1)] == 0)
             continue
 
-        pa_cooldown_limit = pa.shift.end + pa.shift.post.cooldown
+        pa_end = pa.shift.end
+        pa_cooldown_limit = pa_end + pa.shift.post.cooldown
+        
         for sid1 in ctx.sorted_sids:
             s1 = ctx.shift_map[sid1]
             if not s1.post: continue
+            
+            # Use original limits for future boundary assignments too
             s1_cooldown_limit = s1.end + s1.post.cooldown
             
-            if s1.start < pa_cooldown_limit and pa.shift.start < s1_cooldown_limit:
+            # 1. Direct Time Overlap (HARD)
+            if s1.start < pa_end and pa.shift.start < s1.end:
                 for r1 in range(ctx.role_count[sid1]):
                     if (sid1, soldier.id, r1) not in ctx.preassigned_pairs:
                         ctx.model.Add(ctx.assignment_vars[(sid1, soldier.id, r1)] == 0)
+            
+            # 2. Cooldown Violation (SOFT)
+            elif (s1.start < pa_cooldown_limit and pa.shift.start < s1.end) or \
+                 (pa.shift.start < s1_cooldown_limit and s1.start < pa.shift.end):
+                for r1 in range(ctx.role_count[sid1]):
+                    if (sid1, soldier.id, r1) not in ctx.preassigned_pairs:
+                        v_assign = ctx.assignment_vars[(sid1, soldier.id, r1)]
+                        v_violation = ctx.model.NewBoolVar(f"bv_{soldier.id}_{sid1}_{pa.id}")
+                        ctx.model.Add(v_assign <= v_violation)
+                        ctx.cooldown_violations.append(v_violation)
 
 
 def _add_unavailability_constraints(ctx, soldier):
@@ -219,19 +242,32 @@ def _add_unavailability_constraints(ctx, soldier):
 
 
 def _add_intra_window_cooldowns(ctx, soldier):
-    """Prevent two shifts from being assigned to the same soldier when they
-    are closer than the cooldown period of either shift's post."""
+    """Handle conflicts between two shifts within the current window.
+    
+    Direct overlaps are HARD constraints.
+    Cooldown violations are SOFT constraints.
+    """
     for i, sid1 in enumerate(ctx.sorted_sids):
         s1 = ctx.shift_map[sid1]
         cooldown_limit = s1.end + s1.post.cooldown
         for j in range(i + 1, len(ctx.sorted_sids)):
             sid2 = ctx.sorted_sids[j]
             s2 = ctx.shift_map[sid2]
-            if s2.start < cooldown_limit:
+            
+            # 1. Direct Time Overlap (HARD)
+            if s2.start < s1.end:
                 for r1 in range(ctx.role_count[sid1]):
                     for r2 in range(ctx.role_count[sid2]):
                         if (sid1, soldier.id, r1) not in ctx.preassigned_pairs or (sid2, soldier.id, r2) not in ctx.preassigned_pairs:
                             ctx.model.Add(ctx.assignment_vars[(sid1, soldier.id, r1)] + ctx.assignment_vars[(sid2, soldier.id, r2)] <= 1)
+            
+            # 2. Cooldown Violation (SOFT)
+            elif s2.start < cooldown_limit:
+                v_violation = ctx.model.NewBoolVar(f"v_{soldier.id}_{sid1}_{sid2}")
+                s1_vars = [ctx.assignment_vars[(sid1, soldier.id, r)] for r in range(ctx.role_count[sid1])]
+                s2_vars = [ctx.assignment_vars[(sid2, soldier.id, r)] for r in range(ctx.role_count[sid2])]
+                ctx.model.Add(sum(s1_vars) + sum(s2_vars) <= 1 + v_violation)
+                ctx.cooldown_violations.append(v_violation)
             else:
                 break
 
@@ -333,7 +369,6 @@ def _add_rest_optimization_terms(ctx: _SolverContext):
         model.AddMaxEquality(max_prox, soldier_prox_penalties)
     else:
         max_prox = model.NewIntVar(0, 0, "max_prox")
-
     return overall_min_rest, max_prox, min_rest_vars, max_gap
 
 
@@ -401,16 +436,16 @@ def _build_objective(ctx: _SolverContext, shifts, daily_spreads, overall_min_res
     """Assemble and register the multi-tier objective function.
 
     Priority hierarchy (each tier dominates the ones below):
-      1. Maximize filled roles
+      1. Minimize cooldown violations (soft but important)
       2. Minimize shift-count spread (count fairness)
       3. Minimize daily spread (intra-day fairness)
       4. Maximize overall min rest (rest-fairness)
       5. Maximize per-soldier min rest (push to true values)
       6. Minimize max per-soldier proximity (fair close-shift burden)
       7. Minimize sum-of-squared weighted loads (history-aware variance)
+      (Note: "Fill all shifts" and "No direct overlaps" are hard constraints)
     """
     model = ctx.model
-    total_filled = sum(ctx.filled_role_vars.values())
 
     # Shift-count spread
     shift_counts = []
@@ -461,12 +496,14 @@ def _build_objective(ctx: _SolverContext, shifts, daily_spreads, overall_min_res
                              + REST_WINDOW_HOURS * 10 * len(ctx.sorted_sids) * MAX_PROX_WEIGHT)
     DAILY_SPREAD_W = max_rest_contribution + 1
     SPREAD_WEIGHT  = DAILY_SPREAD_W * (len(shifts) + 1)
-    FILL_WEIGHT    = SPREAD_WEIGHT * (len(shifts) + 1)
+    
+    COOLDOWN_WEIGHT = SPREAD_WEIGHT * (len(shifts) + 1)
 
     # Assemble weighted terms
-    obj_terms = [total_filled, spread, max_prox, overall_min_rest] + daily_spreads + min_rest_vars + sum_load_sq
+    total_cooldown_violations = sum(ctx.cooldown_violations)
+    obj_terms = [total_cooldown_violations, spread, max_prox, overall_min_rest] + daily_spreads + min_rest_vars + sum_load_sq
     obj_weights = (
-        [FILL_WEIGHT, -SPREAD_WEIGHT, -MAX_PROX_WEIGHT, OVERALL_REST_W]
+        [-COOLDOWN_WEIGHT, -SPREAD_WEIGHT, -MAX_PROX_WEIGHT, OVERALL_REST_W]
         + [-DAILY_SPREAD_W] * len(daily_spreads)
         + [MIN_REST_WEIGHT] * len(min_rest_vars)
         + [-1] * len(sum_load_sq)
@@ -589,4 +626,110 @@ def solve_shift_assignment(shifts: List[Shift], soldiers: List[Soldier],
     if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
         return _extract_results(solver, ctx)
 
+    if status == cp_model.INFEASIBLE:
+        logger.error("Solver status: INFEASIBLE. Hard constraint 'fill all shifts' cannot be met.")
+    else:
+        logger.warning(f"Solver status: {solver.StatusName(status)}. No solution found.")
+
     return []
+
+def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end: datetime, post: Post, role_id: int, history_scores: Dict[int, float], session):
+    """
+    Evaluates how fitting a soldier is for a specific shift.
+    Returns (score, conflicts, last_shift_info).
+    """
+    score = 0
+    conflicts = []
+    
+    # Normalize datetimes
+    if shift_start.tzinfo: shift_start = shift_start.replace(tzinfo=None)
+    if shift_end.tzinfo: shift_end = shift_end.replace(tzinfo=None)
+
+    # 1. Skill mismatch
+    required_skill = None
+    if post.slots:
+        # Find the specific slot for this role_id
+        slot = next((s for s in post.slots if s.role_index == role_id), None)
+        if slot:
+            required_skill = slot.skill.name
+        
+    soldier_skills = {s.name for s in soldier.skills}
+    if required_skill and required_skill not in soldier_skills:
+        score -= 1000
+        conflicts.append("skill_mismatch")
+    else:
+        score += 100 # Match bonus
+        
+    # 2. Overlap & Cooldown
+    # We look for any assignment for this soldier in a window around the shift
+    window_start = shift_start - timedelta(days=7)
+    window_end = shift_end + timedelta(days=7)
+    
+    assignments = session.query(Assignment).join(Shift).filter(
+        Assignment.soldier_id == soldier.id,
+        Shift.start < window_end,
+        Shift.end > window_start
+    ).all()
+    
+    last_shift = None
+    
+    for a in assignments:
+        other_start = a.shift.start
+        other_end = a.shift.end
+        
+        # Exact overlap
+        if shift_start < other_end and other_start < shift_end:
+            # Check if it's the SAME shift (maybe we are re-evaluating an existing assignment)
+            if a.shift.post_name == post.name and a.shift.start == shift_start and a.role_id == role_id:
+                continue
+            score -= 2000
+            conflicts.append("occupied")
+            
+        # Cooldown Check - Before
+        if other_end <= shift_start:
+            gap = (shift_start - other_end).total_seconds() / 3600
+            cooldown_needed = post.cooldown.total_seconds() / 3600
+            if gap < cooldown_needed:
+                score -= 500
+                conflicts.append("cooldown")
+            
+            # Keep track of last shift
+            if last_shift is None or other_end > last_shift.shift.end:
+                last_shift = a
+                
+        # Cooldown Check - After
+        if other_start >= shift_end:
+            gap = (other_start - shift_end).total_seconds() / 3600
+            other_post = a.shift.post # Should be available via relationship
+            cooldown_needed = other_post.cooldown.total_seconds() / 3600 if other_post else 0
+            if gap < cooldown_needed:
+                score -= 500
+                conflicts.append("cooldown")
+
+    # 3. Unavailability
+    for u in soldier.unavailabilities:
+        if shift_start < u.end_datetime and u.start_datetime < shift_end:
+            score -= 2000
+            conflicts.append("unavailable")
+            
+    # 4. Fairness (History Score)
+    h_score = history_scores.get(soldier.id, 0.0)
+    score -= h_score * 5 # Penalize workload
+    
+    # 5. Rest bonus
+    if last_shift:
+        rest_hours = (shift_start - last_shift.shift.end).total_seconds() / 3600
+        # More rest = higher score. Each hour of rest adds significant value.
+        score += min(rest_hours, 168) * 5 # Bonus for rest up to a week
+    else:
+        # No previous shift found in recent history -> Maximize rest bonus
+        score += 168 * 5 
+        
+    last_shift_info = None
+    if last_shift:
+        last_shift_info = {
+            "end": last_shift.shift.end.isoformat(),
+            "post_name": last_shift.shift.post_name
+        }
+        
+    return score, list(set(conflicts)), last_shift_info

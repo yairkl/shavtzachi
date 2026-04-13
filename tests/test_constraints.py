@@ -50,8 +50,9 @@ def test_cooldown_constraint(db, skill_guard):
     for i, s in enumerate(shifts): s.id = i + 100
     
     assignments = solve_shift_assignment(shifts, [soldier])
-    # Should only assign 1 shift because of 8h cooldown
-    assert len(assignments) == 1
+    # Now that cooldown is a soft constraint, the solver should fill both shifts
+    # despite the violation, because filling all shifts is a hard constraint.
+    assert len(assignments) == 2
 
 def test_overlap_prevention(db, skill_guard):
     # Setup: 2 different posts at the same time, 1 soldier
@@ -72,8 +73,9 @@ def test_overlap_prevention(db, skill_guard):
     for i, s in enumerate(shifts): s.id = i + 100
     
     assignments = solve_shift_assignment(shifts, [soldier])
-    # Should only assign 1 shift total
-    assert len(assignments) == 1
+    # Now that filling all shifts is a hard constraint, this becomes INFEASIBLE
+    # (2 concurrent shifts but only 1 soldier).
+    assert len(assignments) == 0
 
 def test_unavailability_constraint(db, skill_guard):
     # Setup: 1 shift at 00:00-04:00, soldier unavailable 01:00-02:00

@@ -81,6 +81,13 @@ class UnavailabilityResponse(BaseModel):
     end_datetime: datetime
     reason: Optional[str]
 
+class CandidateResponse(BaseModel):
+    id: int
+    name: str
+    fitness_score: float
+    conflicts: List[str]
+    last_shift: Optional[dict]
+
 def get_history_scores(db: Session, exclude_from: Optional[datetime] = None):
     # Calculate sum of (end - start) * intensity_weight for each soldier
     # SQLite logic: (julianday(end) - julianday(start)) * 24 gives hours
@@ -273,6 +280,99 @@ async def import_posts(file: UploadFile = File(...), db: Session = Depends(get_d
     return {"status": "success"}
 
 # --- Endpoints: Scheduler ---
+
+@app.get("/schedule/shifts")
+def get_shifts_with_assignments(start_date: datetime, end_date: datetime, db: Session = Depends(get_db)):
+    """Return every shift slot (filled or empty) for the given date range.
+    
+    Each slot is a combination of (shift × role). If an assignment exists for
+    that slot, soldier_id / soldier_name are populated; otherwise they are null.
+    """
+    try:
+        start_naive = start_date.replace(tzinfo=None)
+        end_naive = end_date.replace(tzinfo=None)
+
+        # Generate all shifts from active posts
+        posts = db.query(Post).filter(Post.is_active == 1).options(
+            joinedload(Post.slots).joinedload(PostTemplateSlot.skill)
+        ).all()
+        shifts = generate_shifts(posts, start_naive, end_naive, session=db)
+
+        # Fetch existing assignments in this range
+        assignments = db.query(Assignment).join(Shift).filter(
+            Shift.start < end_naive,
+            Shift.end > start_naive
+        ).options(
+            joinedload(Assignment.soldier),
+            joinedload(Assignment.shift).joinedload(Shift.post)
+        ).all()
+
+        # Build lookup: (post_name, start_iso, role_id) -> assignment
+        assignment_lookup = {}
+        for a in assignments:
+            key = (a.shift.post_name, a.shift.start.replace(microsecond=0).isoformat(), a.role_id)
+            assignment_lookup[key] = a
+
+        # Produce one entry per (shift × role)
+        result = []
+        for shift in shifts:
+            for slot in shift.post.slots:
+                key = (shift.post_name, shift.start.replace(microsecond=0).isoformat(), slot.role_index)
+                a = assignment_lookup.get(key)
+                result.append({
+                    "post_name": shift.post_name,
+                    "start": shift.start.isoformat(),
+                    "end": shift.end.isoformat(),
+                    "role_id": slot.role_index,
+                    "skill": slot.skill.name,
+                    "soldier_id": a.soldier_id if a else None,
+                    "soldier_name": a.soldier.name if a else None,
+                })
+        return result
+    except Exception as e:
+        logger.error(f"Get shifts error: {e}")
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/schedule/candidates", response_model=List[CandidateResponse])
+def get_candidates(post_name: str, start: datetime, end: datetime, role_id: int, db: Session = Depends(get_db)):
+    try:
+        # Normalize datetimes
+        start_naive = start.replace(tzinfo=None)
+        end_naive = end.replace(tzinfo=None)
+        
+        post = db.query(Post).filter(Post.name == post_name).options(
+            joinedload(Post.slots).joinedload(PostTemplateSlot.skill)
+        ).first()
+        if not post: raise HTTPException(status_code=404, detail="Post not found")
+        
+        soldiers = db.query(Soldier).options(
+            joinedload(Soldier.skills), 
+            joinedload(Soldier.unavailabilities)
+        ).all()
+        
+        history_scores = get_history_scores(db, exclude_from=start)
+        
+        from schedule import evaluate_soldier_fitness
+        
+        results = []
+        for s in soldiers:
+            score, conflicts, last_shift = evaluate_soldier_fitness(s, start_naive, end_naive, post, role_id, history_scores, db)
+            results.append({
+                "id": s.id,
+                "name": s.name,
+                "fitness_score": score,
+                "conflicts": conflicts,
+                "last_shift": last_shift
+            })
+            
+        # Sort by fitness score descending
+        results.sort(key=lambda x: x["fitness_score"], reverse=True)
+        return results
+    except Exception as e:
+        logger.error(f"Get candidates error: {e}")
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/schedule")
 def get_schedule(start_date: datetime, end_date: datetime, db: Session = Depends(get_db)):
