@@ -633,9 +633,145 @@ def solve_shift_assignment(shifts: List[Shift], soldiers: List[Soldier],
 
     return []
 
-def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end: datetime, post: Post, role_id: int, history_scores: Dict[int, float], session):
+def solve_shift_assignment_greedy(shifts: List[Shift], soldiers: List[Soldier],
+                                  history_scores: Optional[dict] = None,
+                                  existing_assignments: Optional[List[Assignment]] = None,
+                                  session=None):
+    """
+    Assign soldiers to shifts using a greedy algorithm.
+    Orders shifts by rarest qualifications and longest duration.
+    """
+    if not shifts or not soldiers:
+        logger.warning("No shifts or soldiers provided to greedy solver.")
+        return []
+
+    if history_scores is None:
+        history_scores = {s.id: 0.0 for s in soldiers}
+    
+    # 1. Calculate Skill Demand (Sustainment)
+    # Only consider posts from the shifts being assigned
+    active_posts = list({s.post for s in shifts if s.post and s.post.is_active})
+    demand_by_skill = defaultdict(float)
+    
+    for post in active_posts:
+        l = post.shift_length.total_seconds() / 3600
+        c = post.cooldown.total_seconds() / 3600
+        if l == 0: l = 1.0 # Prevent division by zero
+        sustain_ratio = (l + c) / l
+        
+        # Calculate active hours per day
+        if post.start_time < post.end_time:
+            active_hours = (datetime.combine(datetime.min, post.end_time) - datetime.combine(datetime.min, post.start_time)).total_seconds() / 3600
+        else:
+            active_hours = 24 - (datetime.combine(datetime.min, post.start_time) - datetime.combine(datetime.min, post.end_time)).total_seconds() / 3600
+            
+        active_ratio = active_hours / 24.0
+        post_demand = sustain_ratio * active_ratio
+        
+        for slot in post.slots:
+            demand_by_skill[slot.skill.name] += post_demand
+
+    # 2. Calculate Skill Supply
+    supply_by_skill = defaultdict(int)
+    for s in soldiers:
+        for sk in s.skills:
+            supply_by_skill[sk.name] += 1
+            
+    # 3. Calculate Criticality (Demand / Supply)
+    criticality = {}
+    all_needed_skills = set(demand_by_skill.keys())
+    for sk_name in all_needed_skills:
+        supply = supply_by_skill.get(sk_name, 0)
+        demand = demand_by_skill[sk_name]
+        if supply == 0:
+            criticality[sk_name] = 9999.0 # Very high criticality for unfillable roles
+        else:
+            criticality[sk_name] = demand / supply
+
+    def get_shift_rarity(shift):
+        if not shift.post.slots:
+            return 0.0
+        # Rarity is the maximum criticality among its requested skills
+        return max(criticality.get(slot.skill.name, 0.0) for slot in shift.post.slots)
+
+    # 4. Sort Shifts
+    # Higher criticality (rarity) first, then longer shifts.
+    sorted_shifts = sorted(shifts, key=lambda s: (get_shift_rarity(s), (s.end - s.start).total_seconds()), reverse=True)
+
+    draft_assignments = []
+    if existing_assignments:
+        for a in existing_assignments:
+            draft_assignments.append({
+                "soldier_id": a.soldier_id,
+                "start": a.shift.start,
+                "end": a.shift.end,
+                "post_name": a.shift.post_name,
+                "role_id": a.role_id,
+                "post": a.shift.post
+            })
+
+    results = []
+    
+    # Use provided session or try to find one
+    session_to_use = session
+    if session_to_use is None:
+        from sqlalchemy.orm import object_session
+        session_to_use = object_session(soldiers[0]) if soldiers else None
+        if not session_to_use:
+            # Fallback (may be slow)
+            session_to_use = Session()
+
+    logger.info(f"Greedy Solver: Processing {len(shifts)} shifts for {len(soldiers)} soldiers.")
+
+    for shift in sorted_shifts:
+        # For each slot in the shift (ordered by role_index)
+        for slot in sorted(shift.post.slots, key=lambda x: x.role_index):
+            role_id = slot.role_index
+            
+            best_soldier = None
+            best_score = -float('inf')
+            
+            for soldier in soldiers:
+                score, conflicts, _ = evaluate_soldier_fitness(
+                    soldier, shift.start, shift.end, shift.post, role_id,
+                    history_scores, session_to_use, draft_assignments
+                )
+                
+                # Hard constraints
+                if any(c in conflicts for c in ["occupied", "unavailable", "skill_mismatch"]):
+                    continue
+                
+                if score > best_score:
+                    best_score = score
+                    best_soldier = soldier
+            
+            if best_soldier:
+                assignment = Assignment(
+                    soldier=best_soldier, soldier_id=best_soldier.id,
+                    shift=shift, shift_id=shift.id, role_id=role_id
+                )
+                results.append(assignment)
+                draft_assignments.append({
+                    "soldier_id": best_soldier.id,
+                    "start": shift.start,
+                    "end": shift.end,
+                    "post_name": shift.post_name,
+                    "role_id": role_id,
+                    "post": shift.post
+                })
+            else:
+                logger.warning(f"Greedy Solver: Could not find any fitting soldier for {shift.post_name} at {shift.start}")
+
+    _log_fairness_stats(results, soldiers)
+    _log_rest_stats(results)
+    
+    logger.info(f"Greedy Solver: Found {len(results)} assignments.")
+    return results
+
+def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end: datetime, post: Post, role_id: int, history_scores: Dict[int, float], session, draft_assignments: List[dict] = None):
     """
     Evaluates how fitting a soldier is for a specific shift.
+    Considers both database assignments and provided draft assignments.
     Returns (score, conflicts, last_shift_info).
     """
     score = 0
@@ -660,27 +796,56 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
     else:
         score += 100 # Match bonus
         
-    # 2. Overlap & Cooldown
+    # 2. Overlap, Cooldown & Diversity
     # We look for any assignment for this soldier in a window around the shift
-    window_start = shift_start - timedelta(days=7)
+    # Diversity window is 30 days back.
+    window_start = shift_start - timedelta(days=30)
     window_end = shift_end + timedelta(days=7)
     
-    assignments = session.query(Assignment).join(Shift).filter(
+    # Collect assignments from DB
+    combined_assignments = []
+    db_assignments = session.query(Assignment).join(Shift).filter(
         Assignment.soldier_id == soldier.id,
         Shift.start < window_end,
         Shift.end > window_start
     ).all()
     
-    last_shift = None
+    for a in db_assignments:
+        combined_assignments.append({
+            "start": a.shift.start,
+            "end": a.shift.end,
+            "post_name": a.shift.post_name,
+            "role_id": a.role_id,
+            "post": a.shift.post
+        })
+
+    # Add draft assignments (filtering for this soldier and window)
+    if draft_assignments:
+        # Pre-fetch posts for draft lookups to avoid N+1
+        post_cache = {p.name: p for p in session.query(Post).all()}
+        for a in draft_assignments:
+            if a.get("soldier_id") == soldier.id:
+                a_start = a["start"] if isinstance(a["start"], datetime) else datetime.fromisoformat(a["start"].replace('Z', ''))
+                a_end = a["end"] if isinstance(a["end"], datetime) else datetime.fromisoformat(a["end"].replace('Z', ''))
+                
+                if a_start < window_end and a_end > window_start:
+                    combined_assignments.append({
+                        "start": a_start,
+                        "end": a_end,
+                        "post_name": a["post_name"],
+                        "role_id": a["role_id"],
+                        "post": post_cache.get(a["post_name"])
+                    })
     
-    for a in assignments:
-        other_start = a.shift.start
-        other_end = a.shift.end
+    last_shift_info_obj = None # To track the actual shift for the "last shift" display
+    for a in combined_assignments:
+        other_start = a["start"]
+        other_end = a["end"]
         
         # Exact overlap
         if shift_start < other_end and other_start < shift_end:
             # Check if it's the SAME shift (maybe we are re-evaluating an existing assignment)
-            if a.shift.post_name == post.name and a.shift.start == shift_start and a.role_id == role_id:
+            if a["post_name"] == post.name and other_start == shift_start and a["role_id"] == role_id:
                 continue
             score -= 2000
             conflicts.append("occupied")
@@ -693,14 +858,21 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
                 score -= 500
                 conflicts.append("cooldown")
             
+            # Mission Diversity (Decay over 30 days)
+            if a["post_name"] == post.name:
+                days_since = (shift_start - other_end).total_seconds() / (24 * 3600)
+                if days_since < 30:
+                    decay_weight = 1.0 - (days_since / 30.0)
+                    score -= 30 * decay_weight
+            
             # Keep track of last shift
-            if last_shift is None or other_end > last_shift.shift.end:
-                last_shift = a
+            if last_shift_info_obj is None or other_end > last_shift_info_obj["end"]:
+                last_shift_info_obj = a
                 
         # Cooldown Check - After
         if other_start >= shift_end:
             gap = (other_start - shift_end).total_seconds() / 3600
-            other_post = a.shift.post # Should be available via relationship
+            other_post = a["post"]
             cooldown_needed = other_post.cooldown.total_seconds() / 3600 if other_post else 0
             if gap < cooldown_needed:
                 score -= 500
@@ -713,23 +885,24 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
             conflicts.append("unavailable")
             
     # 4. Fairness (History Score)
-    h_score = history_scores.get(soldier.id, 0.0)
-    score -= h_score * 5 # Penalize workload
+    # h_score = history_scores.get(soldier.id, 0.0)
+    # score -= h_score * 5 # Penalize workload
     
     # 5. Rest bonus
-    if last_shift:
-        rest_hours = (shift_start - last_shift.shift.end).total_seconds() / 3600
+    if last_shift_info_obj:
+        intencity_weight = last_shift_info_obj["post"].intensity_weight
+        rest_hours = (shift_start - last_shift_info_obj["end"]).total_seconds() / 3600
         # More rest = higher score. Each hour of rest adds significant value.
-        score += min(rest_hours, 168) * 5 # Bonus for rest up to a week
+        score += min(rest_hours, 168) * (5/intencity_weight) # Bonus for rest up to a week
     else:
         # No previous shift found in recent history -> Maximize rest bonus
-        score += 168 * 5 
+        score += 168 * 5
         
     last_shift_info = None
-    if last_shift:
+    if last_shift_info_obj:
         last_shift_info = {
-            "end": last_shift.shift.end.isoformat(),
-            "post_name": last_shift.shift.post_name
+            "end": last_shift_info_obj["end"].isoformat(),
+            "post_name": last_shift_info_obj["post_name"]
         }
         
     return score, list(set(conflicts)), last_shift_info

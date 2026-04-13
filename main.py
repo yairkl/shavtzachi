@@ -88,6 +88,13 @@ class CandidateResponse(BaseModel):
     conflicts: List[str]
     last_shift: Optional[dict]
 
+class CandidateRequest(BaseModel):
+    post_name: str
+    start: datetime
+    end: datetime
+    role_id: int
+    draft_assignments: List[AssignmentCreate] = []
+
 def get_history_scores(db: Session, exclude_from: Optional[datetime] = None):
     # Calculate sum of (end - start) * intensity_weight for each soldier
     # SQLite logic: (julianday(end) - julianday(start)) * 24 gives hours
@@ -334,14 +341,14 @@ def get_shifts_with_assignments(start_date: datetime, end_date: datetime, db: Se
         import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/schedule/candidates", response_model=List[CandidateResponse])
-def get_candidates(post_name: str, start: datetime, end: datetime, role_id: int, db: Session = Depends(get_db)):
+@app.post("/schedule/candidates", response_model=List[CandidateResponse])
+def get_candidates(req: CandidateRequest, db: Session = Depends(get_db)):
     try:
         # Normalize datetimes
-        start_naive = start.replace(tzinfo=None)
-        end_naive = end.replace(tzinfo=None)
+        start_naive = req.start.replace(tzinfo=None)
+        end_naive = req.end.replace(tzinfo=None)
         
-        post = db.query(Post).filter(Post.name == post_name).options(
+        post = db.query(Post).filter(Post.name == req.post_name).options(
             joinedload(Post.slots).joinedload(PostTemplateSlot.skill)
         ).first()
         if not post: raise HTTPException(status_code=404, detail="Post not found")
@@ -351,13 +358,19 @@ def get_candidates(post_name: str, start: datetime, end: datetime, role_id: int,
             joinedload(Soldier.unavailabilities)
         ).all()
         
-        history_scores = get_history_scores(db, exclude_from=start)
+        history_scores = get_history_scores(db, exclude_from=req.start)
         
         from schedule import evaluate_soldier_fitness
         
+        # Convert draft_assignments to list of dicts for the fitness function
+        draft_list = [d.model_dump() for d in req.draft_assignments]
+        
         results = []
         for s in soldiers:
-            score, conflicts, last_shift = evaluate_soldier_fitness(s, start_naive, end_naive, post, role_id, history_scores, db)
+            score, conflicts, last_shift = evaluate_soldier_fitness(
+                s, start_naive, end_naive, post, req.role_id, history_scores, db, 
+                draft_assignments=draft_list
+            )
             results.append({
                 "id": s.id,
                 "name": s.name,
@@ -453,7 +466,7 @@ def save_schedule(req: SaveScheduleRequest, db: Session = Depends(get_db)):
         end_naive = req.end_date.replace(tzinfo=None)
 
         # Clear existing assignments in this range
-        shifts_to_clear = db.query(Shift.id).filter(Shift.start < end_naive, Shift.end > start_naive).all()
+        shifts_to_clear = db.query(Shift.id).filter(Shift.start >= start_naive, Shift.start < end_naive).all()
         shift_ids = [s[0] for s in shifts_to_clear]
         if shift_ids:
             db.query(Assignment).filter(Assignment.shift_id.in_(shift_ids)).delete(synchronize_session=False)
@@ -485,8 +498,19 @@ def save_schedule(req: SaveScheduleRequest, db: Session = Depends(get_db)):
 # --- Endpoints: Unavailability ---
 
 @app.get("/unavailabilities", response_model=List[UnavailabilityResponse])
-def get_unavailabilities(db: Session = Depends(get_db)):
-    records = db.query(Unavailability).options(joinedload(Unavailability.soldier)).all()
+def get_unavailabilities(
+    start_date: Optional[datetime] = None, 
+    end_date: Optional[datetime] = None, 
+    db: Session = Depends(get_db)
+):
+    query = db.query(Unavailability).options(joinedload(Unavailability.soldier))
+    
+    if start_date:
+        query = query.filter(Unavailability.end_datetime > start_date.replace(tzinfo=None))
+    if end_date:
+        query = query.filter(Unavailability.start_datetime < end_date.replace(tzinfo=None))
+        
+    records = query.all()
     return [{
         "id": r.id,
         "soldier_id": r.soldier_id,

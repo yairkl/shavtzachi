@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { getSoldiers, getPosts, getShiftsWithAssignments, draftSchedule, saveSchedule, getCandidates } from '@/services/api';
+import { getSoldiers, getPosts, getShiftsWithAssignments, draftSchedule, saveSchedule, getCandidates, getUnavailabilities } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import { Save, RefreshCw, ChevronLeft, ChevronRight, User, LayoutGrid, CheckCircle2, GripVertical, Wand2, X, PanelRightClose, PanelRight, AlertTriangle, ShieldAlert, Filter, Ban, CalendarX, Clock4 } from 'lucide-react';
 import { addDays, addHours, format, startOfToday, startOfDay, parseISO, isBefore, differenceInMinutes } from 'date-fns';
@@ -192,6 +192,7 @@ export default function Scheduler() {
   const [soldiers, setSoldiers] = useState([]);
   const [posts, setPosts] = useState([]);
   const [shifts, setShifts] = useState([]);
+  const [unavailabilities, setUnavailabilities] = useState([]);
   const [loading, setLoading] = useState(false);
   const [isDraft, setIsDraft] = useState(false);
   const [currentDate, setCurrentDate] = useState(startOfToday());
@@ -222,8 +223,12 @@ export default function Scheduler() {
       const { dayStart, dayEnd } = getDayBounds();
       const start = format(dayStart, "yyyy-MM-dd'T'HH:mm:ss");
       const endStr = format(dayEnd, "yyyy-MM-dd'T'HH:mm:ss");
-      const { data } = await getShiftsWithAssignments(start, endStr);
-      setShifts(data);
+      const [shiftsRes, unavailRes] = await Promise.all([
+        getShiftsWithAssignments(start, endStr),
+        getUnavailabilities(start, endStr)
+      ]);
+      setShifts(shiftsRes.data);
+      setUnavailabilities(unavailRes.data);
       setIsDraft(false);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
@@ -249,11 +254,23 @@ export default function Scheduler() {
       const fetchCandidates = async () => {
         setLoadingCandidates(true);
         try {
+          // Collect all current assignments in UI state to consider for fitness (Draft mode)
+          const draftAssignments = shifts
+            .filter(sh => sh.soldier_id != null)
+            .map(sh => ({
+               soldier_id: sh.soldier_id,
+               post_name: sh.post_name,
+               start: sh.start,
+               end: sh.end,
+               role_id: sh.role_id
+            }));
+
           const { data } = await getCandidates(
             selectedShift.post_name,
             selectedShift.start,
             selectedShift.end,
-            selectedShift.role_id
+            selectedShift.role_id,
+            draftAssignments
           );
           setCandidates(data);
         } catch (e) {
@@ -279,8 +296,8 @@ export default function Scheduler() {
   const handleDraft = async () => {
     setLoading(true);
     try {
-      const start = format(currentDate, "yyyy-MM-dd'T'HH:mm:ss");
-      const { dayEnd } = getDayBounds();
+      const { dayStart, dayEnd } = getDayBounds();
+      const start = format(dayStart, "yyyy-MM-dd'T'HH:mm:ss");
       const endStr = format(dayEnd, "yyyy-MM-dd'T'HH:mm:ss");
 
       const manualAssignments = shifts.filter(s => s.soldier_id != null);
@@ -321,8 +338,8 @@ export default function Scheduler() {
   const handleSave = async () => {
     setLoading(true);
     try {
-      const start = format(currentDate, "yyyy-MM-dd'T'HH:mm:ss");
-      const { dayEnd } = getDayBounds();
+      const { dayStart, dayEnd } = getDayBounds();
+      const start = format(dayStart, "yyyy-MM-dd'T'HH:mm:ss");
       const endStr = format(dayEnd, "yyyy-MM-dd'T'HH:mm:ss");
       
       const assigned = shifts.filter(s => s.soldier_id != null);
@@ -401,13 +418,28 @@ export default function Scheduler() {
   // --- Build resource rows ---
   const resources = useMemo(() => {
     if (viewMode === 'soldier') {
-      return soldiers.map(s => ({
-         id: s.id.toString(),
-         name: s.name,
-         shifts: shifts
-           .map((sh, i) => ({ ...sh, originalIndex: i }))
-           .filter(sh => sh.soldier_id === s.id)
-      }));
+      return soldiers.map(s => {
+        const soldierShifts = shifts
+          .map((sh, i) => ({ ...sh, originalIndex: i }))
+          .filter(sh => sh.soldier_id === s.id);
+        
+        const soldierUnavail = unavailabilities
+          .filter(u => u.soldier_id === s.id)
+          .map(u => ({
+             ...u,
+             type: 'unavailability',
+             start: u.start_datetime,
+             end: u.end_datetime,
+             post_name: 'Unavailable',
+             originalIndex: -1 // Not a shift slot
+          }));
+
+        return {
+           id: s.id.toString(),
+           name: s.name,
+           shifts: [...soldierShifts, ...soldierUnavail]
+        };
+      });
     } else {
       const groupMap = new Map();
       shifts.forEach((slot, idx) => {
@@ -642,34 +674,38 @@ export default function Scheduler() {
                           if (isEmpty && viewMode === 'soldier') return null;
 
                           // Filled slot
+                          const isUnavail = shift.type === 'unavailability';
                           return (
                             <div 
-                               key={`${res.id}-${shift.originalIndex}`}
-                               onClick={() => handleShiftClick(shift, shift.originalIndex)}
+                               key={`${res.id}-${shift.originalIndex}-${shift.id || shift.originalIndex}`}
+                               onClick={() => !isUnavail && handleShiftClick(shift, shift.originalIndex)}
                                style={{ left: styleInfo.left, width: styleInfo.width }}
                                className={cn(
-                                 "absolute top-1 bottom-1 p-2 rounded-lg text-xs leading-tight transition-all duration-300 cursor-pointer overflow-hidden backdrop-blur hover:scale-[1.02] hover:z-10 shadow-lg group/shift",
-                                 hasWarning
-                                   ? "bg-red-500/20 border border-red-500/60 hover:bg-red-500/30 text-red-100 shadow-red-900/30 ring-1 ring-red-500/30"
-                                   : isDraft
-                                     ? "bg-amber-500/20 border border-amber-500/50 hover:bg-amber-500/30 text-amber-200 shadow-amber-900/20"
-                                     : "bg-indigo-500/20 border border-indigo-500/50 hover:bg-indigo-500/30 text-indigo-100 shadow-indigo-900/20",
+                                 "absolute top-1 bottom-1 p-2 rounded-lg text-xs leading-tight transition-all duration-300 overflow-hidden backdrop-blur shadow-lg group/shift",
+                                 isUnavail
+                                   ? "bg-slate-800/60 border border-slate-700 text-slate-400 cursor-not-allowed"
+                                   : hasWarning
+                                     ? "bg-red-500/20 border border-red-500/60 hover:bg-red-500/30 text-red-100 shadow-red-900/30 ring-1 ring-red-500/30 cursor-pointer hover:scale-[1.02] hover:z-10"
+                                     : isDraft
+                                       ? "bg-amber-500/20 border border-amber-500/50 hover:bg-amber-500/30 text-amber-200 shadow-amber-900/20 cursor-pointer hover:scale-[1.02] hover:z-10"
+                                       : "bg-indigo-500/20 border border-indigo-500/50 hover:bg-indigo-500/30 text-indigo-100 shadow-indigo-900/20 cursor-pointer hover:scale-[1.02] hover:z-10",
                                  styleInfo.clippedStart && "rounded-l-none border-l-0",
                                  styleInfo.clippedEnd && "rounded-r-none border-r-0"
                                )}
                             >
                                <div className="font-bold truncate opacity-90 drop-shadow-sm flex items-center gap-1">
-                                 {hasWarning && (
+                                 {isUnavail ? <Ban className="w-3 h-3 text-slate-500" /> : hasWarning && (
                                    <ConflictTooltip icon={AlertTriangle} color="text-red-400" warnings={slotWarnings} />
                                  )}
                                  {viewMode === 'soldier' ? shift.post_name : shift.soldier_name}
                                </div>
                                <div className="text-[10px] opacity-70 truncate mt-0.5">
                                  {format(parseISO(shift.start), 'HH:mm')} - {format(parseISO(shift.end), 'HH:mm')}
+                                 {isUnavail && shift.reason && ` · ${shift.reason}`}
                                </div>
 
                                {/* Unassign button (post view only) */}
-                               {viewMode === 'post' && (
+                               {viewMode === 'post' && !isUnavail && (
                                  <button
                                    onClick={(e) => { e.stopPropagation(); handleUnassign(shift.originalIndex); }}
                                    className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-red-500/0 hover:bg-red-500/60 flex items-center justify-center opacity-0 group-hover/shift:opacity-100 transition-opacity"

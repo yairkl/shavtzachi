@@ -27,10 +27,11 @@ export const getSchedule = (startDate, endDate) =>
 export const getShiftsWithAssignments = (startDate, endDate) =>
   apiClient.get('/schedule/shifts', { params: { start_date: startDate, end_date: endDate } });
 
-export const getCandidates = (postName, start, end, roleId) =>
-  apiClient.get('/schedule/candidates', { params: { post_name: postName, start, end, role_id: roleId } });
+export const getCandidates = (postName, start, end, roleId, draftAssignments = []) =>
+  apiClient.post('/schedule/candidates', { post_name: postName, start, end, role_id: roleId, draft_assignments: draftAssignments });
 
-export const getUnavailabilities = () => apiClient.get('/unavailabilities');
+export const getUnavailabilities = (startDate, endDate) => 
+  apiClient.get('/unavailabilities', { params: { start_date: startDate, end_date: endDate } });
 export const createUnavailability = (data) => apiClient.post('/unavailabilities', data);
 export const updateUnavailability = (id, data) => apiClient.put(`/unavailabilities/${id}`, data);
 export const deleteUnavailability = (id) => apiClient.delete(`/unavailabilities/${id}`);
