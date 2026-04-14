@@ -88,6 +88,7 @@ class CandidateResponse(BaseModel):
     fitness_score: float
     conflicts: List[str]
     last_shift: Optional[dict]
+    next_shift: Optional[dict]
 
 class CandidateRequest(BaseModel):
     post_name: str
@@ -368,7 +369,7 @@ def get_candidates(req: CandidateRequest, db: Session = Depends(get_db)):
         
         results = []
         for s in soldiers:
-            score, conflicts, last_shift = evaluate_soldier_fitness(
+            score, conflicts, last_shift, next_shift = evaluate_soldier_fitness(
                 s, start_naive, end_naive, post, req.role_id, history_scores, db, 
                 draft_assignments=draft_list
             )
@@ -377,7 +378,8 @@ def get_candidates(req: CandidateRequest, db: Session = Depends(get_db)):
                 "name": s.name,
                 "fitness_score": score,
                 "conflicts": conflicts,
-                "last_shift": last_shift
+                "last_shift": last_shift,
+                "next_shift": next_shift
             })
             
         # Sort by fitness score descending

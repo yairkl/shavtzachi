@@ -966,6 +966,11 @@ export default function Scheduler() {
                           ) : (
                             <p className="text-[10px] text-slate-600 italic">No recent shifts recorded</p>
                           )}
+                          {c.next_shift && (
+                            <p className="text-[10px] text-slate-500 leading-tight mt-0.5">
+                              Next: <span className="text-slate-400 font-medium">{c.next_shift.post_name}</span> starts {format(parseISO(c.next_shift.start), 'MMM dd, HH:mm')}
+                            </p>
+                          )}
                         </div>
 
                         <div className="flex flex-col items-end shrink-0 gap-1">

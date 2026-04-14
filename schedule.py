@@ -765,7 +765,7 @@ def solve_shift_assignment_greedy(shifts: List[Shift], soldiers: List[Soldier],
             best_score = -float('inf')
             
             for soldier in soldiers:
-                score, conflicts, _ = evaluate_soldier_fitness(
+                score, conflicts, _, _ = evaluate_soldier_fitness(
                     soldier, shift.start, shift.end, shift.post, role_id,
                     history_scores, session_to_use, draft_assignments
                 )
@@ -805,7 +805,7 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
     """
     Evaluates how fitting a soldier is for a specific shift.
     Considers both database assignments and provided draft assignments.
-    Returns (score, conflicts, last_shift_info).
+    Returns (score, conflicts, last_shift_info, next_shift_info).
     """
     score = 0
     conflicts = []
@@ -831,9 +831,9 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
         
     # 2. Overlap, Cooldown & Diversity
     # We look for any assignment for this soldier in a window around the shift
-    # Diversity window is 30 days back.
+    # Diversity window is 30 days back/forward.
     window_start = shift_start - timedelta(days=30)
-    window_end = shift_end + timedelta(days=7)
+    window_end = shift_end + timedelta(days=30)
     
     # Collect assignments from DB
     combined_assignments = []
@@ -871,6 +871,8 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
                     })
     
     last_shift_info_obj = None # To track the actual shift for the "last shift" display
+    next_shift_info_obj = None # To track the actual shift for the "next shift" display
+    
     for a in combined_assignments:
         other_start = a["start"]
         other_end = a["end"]
@@ -903,13 +905,24 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
                 last_shift_info_obj = a
                 
         # Cooldown Check - After
-        if other_start >= shift_end:
+        elif other_start >= shift_end:
             gap = (other_start - shift_end).total_seconds() / 3600
             other_post = a["post"]
             cooldown_needed = other_post.cooldown.total_seconds() / 3600 if other_post else 0
             if gap < cooldown_needed:
                 score -= 500
                 conflicts.append("cooldown")
+
+            # Mission Diversity (Future)
+            if a["post_name"] == post.name:
+                days_until = (other_start - shift_end).total_seconds() / (24 * 3600)
+                if days_until < 30:
+                    decay_weight = 1.0 - (days_until / 30.0)
+                    score -= 30 * decay_weight
+            
+            # Keep track of next shift
+            if next_shift_info_obj is None or other_start < next_shift_info_obj["start"]:
+                next_shift_info_obj = a
 
     # 3. Unavailability
     for u in soldier.unavailabilities:
@@ -922,14 +935,23 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
     # score -= h_score * 5 # Penalize workload
     
     # 5. Rest bonus
+    # Past rest
     if last_shift_info_obj:
-        intencity_weight = last_shift_info_obj["post"].intensity_weight
+        intensity = last_shift_info_obj["post"].intensity_weight
         rest_hours = (shift_start - last_shift_info_obj["end"]).total_seconds() / 3600
         # More rest = higher score. Each hour of rest adds significant value.
-        score += min(rest_hours, 168) * (5/intencity_weight) # Bonus for rest up to a week
+        score += min(rest_hours, 168) * (5/intensity) # Bonus for rest up to a week
     else:
-        # No previous shift found in recent history -> Maximize rest bonus
-        score += 168 * 5
+        # No previous shift found in recent history -> Semi-max rest bonus
+        score += 168 * 2.5
+        
+    # Future rest
+    if next_shift_info_obj:
+        intensity = post.intensity_weight # Current shift's intensity
+        rest_hours = (next_shift_info_obj["start"] - shift_end).total_seconds() / 3600
+        score += min(rest_hours, 168) * (5/intensity)
+    else:
+        score += 168 * 2.5
         
     last_shift_info = None
     if last_shift_info_obj:
@@ -938,4 +960,12 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
             "post_name": last_shift_info_obj["post_name"]
         }
         
-    return score, list(set(conflicts)), last_shift_info
+    next_shift_info = None
+    if next_shift_info_obj:
+        next_shift_info = {
+            "start": next_shift_info_obj["start"].isoformat(),
+            "post_name": next_shift_info_obj["post_name"]
+        }
+        
+    return score, list(set(conflicts)), last_shift_info, next_shift_info
+
