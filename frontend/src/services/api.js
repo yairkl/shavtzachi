@@ -38,8 +38,8 @@ export const deleteUnavailability = (id) => apiClient.delete(`/unavailabilities/
 export const checkManpower = (startDate, endDate) => 
   apiClient.get('/unavailabilities/check-manpower', { params: { start_date: startDate, end_date: endDate } });
 
-export const draftSchedule = (startDate, endDate) => 
-  apiClient.post('/schedule/draft', { start_date: startDate, end_date: endDate });
+export const draftSchedule = (startDate, endDate, algorithm = "optimal") => 
+  apiClient.post('/schedule/draft', { start_date: startDate, end_date: endDate, algorithm });
 export const saveSchedule = (startDate, endDate, assignments) => 
   apiClient.post('/schedule/save', { start_date: startDate, end_date: endDate, assignments });
 

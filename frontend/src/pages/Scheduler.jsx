@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { getSoldiers, getPosts, getShiftsWithAssignments, draftSchedule, saveSchedule, getCandidates, getUnavailabilities } from '@/services/api';
 import { Button } from '@/components/ui/button';
-import { Save, RefreshCw, ChevronLeft, ChevronRight, User, LayoutGrid, CheckCircle2, GripVertical, Wand2, X, PanelRightClose, PanelRight, AlertTriangle, ShieldAlert, Filter, Ban, CalendarX, Clock4 } from 'lucide-react';
+import { Save, RefreshCw, ChevronLeft, ChevronRight, User, Users, LayoutGrid, CheckCircle2, GripVertical, Wand2, X, PanelRightClose, PanelRight, AlertTriangle, ShieldAlert, Filter, Ban, CalendarX, Clock4 } from 'lucide-react';
 import { addDays, addHours, format, startOfToday, startOfDay, parseISO, isBefore, differenceInMinutes } from 'date-fns';
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +16,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 const ConflictTooltip = ({ icon: Icon, color, message, warnings }) => {
   const [open, setOpen] = useState(false);
@@ -201,6 +208,7 @@ export default function Scheduler() {
   const [dragOverSlotKey, setDragOverSlotKey] = useState(null);
   const [soldierFilter, setSoldierFilter] = useState('');
   const [skillFilter, setSkillFilter] = useState(''); // Filter by skill/role
+  const [assignmentAlgorithm, setAssignmentAlgorithm] = useState('optimal');
 
   // Reassignment dialog (fallback)
   const [selectedShift, setSelectedShift] = useState(null);
@@ -312,7 +320,7 @@ export default function Scheduler() {
         await saveSchedule(start, endStr, payload);
       }
 
-      const { data } = await draftSchedule(start, endStr);
+      const { data } = await draftSchedule(start, endStr, assignmentAlgorithm);
       
       const solverLookup = {};
       for (const a of data) {
@@ -511,72 +519,111 @@ export default function Scheduler() {
   const warningCount = new Set(warnings.map(w => w.slotIndex)).size;
 
   return (
-    <div className="flex h-[calc(100vh-100px)] gap-0">
-      {/* ===== Main Content ===== */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Header Bar */}
-        <div className="flex justify-between items-end shrink-0 pb-4 px-1">
-          <div className="flex items-center gap-4">
-            <h2 className="text-3xl font-black tracking-tight text-white flex items-center gap-4">
-               Shift Scheduler {isDraft && <Badge variant="secondary" className="bg-amber-500/20 text-amber-300 border-amber-500/50 animate-pulse px-3 py-1 text-xs">UNSAVED DRAFT</Badge>}
-               {!isDraft && filledSlots > 0 && <Badge variant="secondary" className="bg-emerald-500/20 text-emerald-300 border-emerald-500/50 gap-1 px-3 py-1 text-xs"><CheckCircle2 className="w-3 h-3"/> SAVED</Badge>}
-            </h2>
-            {totalSlots > 0 && (
-              <div className="flex items-center gap-2 text-xs">
-                <span className="text-emerald-400 font-semibold">{filledSlots} filled</span>
-                <span className="text-slate-600">·</span>
-                <span className="text-slate-400">{emptySlots} empty</span>
-                <span className="text-slate-600">·</span>
-                <span className="text-slate-500">{totalSlots} total</span>
-                {warningCount > 0 && (
-                  <>
-                    <span className="text-slate-600">·</span>
-                    <span className="text-amber-400 font-semibold flex items-center gap-1">
-                      <AlertTriangle className="w-3 h-3" /> {warningCount} {warningCount === 1 ? 'issue' : 'issues'}
-                    </span>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-          <div className="flex gap-3">
-            <div className="flex items-center gap-1 bg-card/60 backdrop-blur pb-0 p-1 rounded-lg border border-white/10 shadow-lg">
-               <Button variant={viewMode === 'soldier' ? 'secondary' : 'ghost'} size="sm" onClick={() => setViewMode('soldier')} className="gap-2 rounded-md">
-                  <User className="w-4 h-4" /> Soldier
-               </Button>
-               <Button variant={viewMode === 'post' ? 'secondary' : 'ghost'} size="sm" onClick={() => setViewMode('post')} className="gap-2 rounded-md">
-                  <LayoutGrid className="w-4 h-4" /> Post
-               </Button>
+    <div className="flex flex-col h-[calc(100vh-100px)] gap-4 p-4 overflow-hidden">
+      {/* Header Bar - Now Top-Level and Full Width */}
+      <div className="flex justify-between items-center shrink-0 border-b border-white/10 pb-4">
+        <div className="flex items-center gap-4">
+          <h2 className="text-xl font-black tracking-tight text-white flex items-center gap-3">
+             Shift Scheduler {isDraft && <Badge variant="secondary" className="bg-amber-500/20 text-amber-300 border-amber-500/50 animate-pulse px-2 py-0.5 text-[10px]">DRAFT</Badge>}
+             {!isDraft && filledSlots > 0 && <Badge variant="secondary" className="bg-emerald-500/20 text-emerald-300 border-emerald-500/50 gap-1 px-2 py-0.5 text-[10px]"><CheckCircle2 className="w-2.5 h-2.5"/> SAVED</Badge>}
+          </h2>
+          {totalSlots > 0 && (
+            <div className="flex items-center gap-2 text-[10px] bg-white/5 px-2.5 py-1 rounded-full border border-white/5">
+              <span className="text-emerald-400 font-semibold">{filledSlots} filled</span>
+              <span className="text-slate-600">·</span>
+              <span className="text-slate-400">{emptySlots} empty</span>
+              <span className="text-slate-600">·</span>
+              <span className="text-slate-500">{totalSlots} total</span>
+              {warningCount > 0 && (
+                <>
+                  <span className="text-slate-600">·</span>
+                  <span className="text-amber-400 font-semibold flex items-center gap-1">
+                    <AlertTriangle className="w-2.5 h-2.5" /> {warningCount} {warningCount === 1 ? 'issue' : 'issues'}
+                  </span>
+                </>
+              )}
             </div>
-
-            <div className="flex items-center gap-2 mr-2 bg-card/60 backdrop-blur p-1 rounded-lg border border-white/10 shadow-lg">
-               <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-white/10" onClick={() => setCurrentDate(d => addDays(d, -1))}>
-                  <ChevronLeft className="w-4 h-4" />
-               </Button>
-               <span className="text-sm font-semibold min-w-[110px] text-center tracking-wide">{format(currentDate, 'MMM dd, yyyy')}</span>
-               <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-white/10" onClick={() => setCurrentDate(d => addDays(d, 1))}>
-                  <ChevronRight className="w-4 h-4" />
-               </Button>
-            </div>
-            
-            <Button variant="outline" onClick={handleDraft} disabled={loading} className="gap-2 border-indigo-500/30 hover:border-indigo-500/80 hover:bg-indigo-500/10">
-              <Wand2 className={cn("w-4 h-4 text-indigo-400", loading && "animate-spin")} /> 
-              <span className="font-semibold">Auto Assign</span>
-            </Button>
-            
-            {(isDraft || filledSlots > 0) && (
-              <Button onClick={handleSave} disabled={loading} className="gap-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-lg shadow-emerald-900/50">
-                <Save className="w-4 h-4" /> <span className="font-semibold">Save</span>
-              </Button>
-            )}
-
-            {viewMode === 'post' && !sidebarOpen && (
-              <Button variant="ghost" size="icon" className="h-9 w-9 hover:bg-white/10" onClick={() => setSidebarOpen(true)}>
-                <PanelRight className="w-4 h-4" />
-              </Button>
-            )}
-          </div>
+          )}
         </div>
+
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1 bg-card/40 backdrop-blur p-0.5 rounded-lg border border-white/10">
+             <Button variant={viewMode === 'soldier' ? 'secondary' : 'ghost'} size="sm" onClick={() => setViewMode('soldier')} className="h-7 gap-1.5 px-3 text-[11px] rounded-md">
+                <User className="w-3.5 h-3.5" /> Soldier
+             </Button>
+             <Button variant={viewMode === 'post' ? 'secondary' : 'ghost'} size="sm" onClick={() => setViewMode('post')} className="h-7 gap-1.5 px-3 text-[11px] rounded-md">
+                <LayoutGrid className="w-3.5 h-3.5" /> Post
+             </Button>
+          </div>
+
+          <div className="flex items-center gap-1 bg-card/40 backdrop-blur p-0.5 rounded-lg border border-white/10">
+             <Button variant="ghost" size="icon" className="h-7 w-7 hover:bg-white/10" onClick={() => setCurrentDate(d => addDays(d, -1))}>
+                <ChevronLeft className="w-3.5 h-3.5" />
+             </Button>
+             <span className="text-[11px] font-bold min-w-[90px] text-center tracking-wide">{format(currentDate, 'MMM dd, yyyy')}</span>
+             <Button variant="ghost" size="icon" className="h-7 w-7 hover:bg-white/10" onClick={() => setCurrentDate(d => addDays(d, 1))}>
+                <ChevronRight className="w-3.5 h-3.5" />
+             </Button>
+          </div>
+          
+          <div className="flex items-center gap-1 bg-slate-900/40 backdrop-blur-xl p-0.5 rounded-full border border-white/10 ring-1 ring-white/5">
+             <Select value={assignmentAlgorithm} onValueChange={setAssignmentAlgorithm}>
+               <SelectTrigger className="h-8 w-[180px] text-[11px] bg-transparent border-none focus:ring-0 focus:ring-offset-0 hover:bg-white/5 rounded-full px-4 transition-colors">
+                 <div className="flex items-center gap-2 text-slate-300">
+                   <div className="w-1 h-1 rounded-full bg-indigo-500" />
+                   <SelectValue placeholder="Algorithm" />
+                 </div>
+               </SelectTrigger>
+               <SelectContent className="bg-slate-900/95 border-white/10 backdrop-blur-xl w-[320px]">
+                 <SelectItem value="optimal" className="text-xs focus:bg-indigo-500/20 focus:text-indigo-200 cursor-pointer py-2">
+                   <div className="flex flex-col gap-0.5">
+                     <span className="font-bold">Balanced Distribution</span>
+                     <span className="text-[10px] opacity-50">Fair workload & rest maximization</span>
+                   </div>
+                 </SelectItem>
+                 <SelectItem value="greedy" className="text-xs focus:bg-indigo-500/20 focus:text-indigo-200 cursor-pointer py-2">
+                   <div className="flex flex-col gap-0.5">
+                     <span className="font-bold">Fast Assignment</span>
+                     <span className="text-[10px] opacity-50">Heuristic-based greedy allocation</span>
+                   </div>
+                 </SelectItem>
+               </SelectContent>
+             </Select>
+             
+             <div className="w-[1px] h-3 bg-white/10 mx-0.5" />
+
+             <Button 
+               onClick={handleDraft} 
+               disabled={loading} 
+               className="h-8 px-4 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] gap-1.5 shadow-lg shadow-indigo-500/20 active:scale-95 shrink-0"
+             >
+               <Wand2 className={cn("w-3 h-3 transition-transform", loading && "animate-spin")} /> 
+               <span>Auto Assign</span>
+             </Button>
+          </div>
+          
+          {(isDraft || filledSlots > 0) && (
+            <Button onClick={handleSave} disabled={loading} className="h-8 px-4 text-[11px] gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-lg shadow-emerald-900/50 rounded-full">
+              <Save className="w-3.5 h-3.5" /> <span className="font-bold">Save</span>
+            </Button>
+          )}
+
+          {viewMode === 'post' && (
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              className={cn("h-8 w-8 transition-colors", sidebarOpen ? "bg-indigo-500/20 text-indigo-400" : "hover:bg-white/10")} 
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+            >
+              <PanelRight className="w-4 h-4" />
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-1 min-h-0 gap-4">
+        {/* Main Content Area */}
+        <div className="flex-1 flex flex-col min-w-0">
 
         {/* Warning Banner */}
         {warningCount > 0 && (
@@ -601,7 +648,7 @@ export default function Scheduler() {
         )}
 
         {/* Timeline Grid */}
-        <div className="flex-1 overflow-auto rounded-xl border border-white/10 bg-card/40 backdrop-blur-xl shadow-2xl relative custom-scrollbar">
+        <div className="flex-1 overflow-auto rounded-xl border border-white/10 bg-card/20 backdrop-blur-xl shadow-2xl relative custom-scrollbar">
           {resources.length > 0 ? (
             <div className="min-w-[800px] w-full mt-1">
               {/* Header Timeline */}
@@ -737,66 +784,75 @@ export default function Scheduler() {
           )}
         </div>
       </div>
-
       {/* ===== Soldier Sidebar — RIGHT SIDE (Post view only) ===== */}
-      {viewMode === 'post' && sidebarOpen && (
-        <div className="w-56 shrink-0 flex flex-col border-l border-white/10 bg-card/60 backdrop-blur-xl">
-          <div className="p-3 border-b border-white/10 flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Personnel</span>
-            <Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-white/10" onClick={() => setSidebarOpen(false)}>
-              <PanelRightClose className="w-3.5 h-3.5" />
-            </Button>
-          </div>
-          {/* Search + Skill filter */}
-          <div className="p-2 space-y-1.5 border-b border-white/5">
-            <input
-              type="text"
-              placeholder="Search by name..."
-              value={soldierFilter}
-              onChange={e => setSoldierFilter(e.target.value)}
-              className="w-full text-xs bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/50"
-            />
-            <div className="relative">
-              <Filter className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500 pointer-events-none" />
-              <select
-                value={skillFilter}
-                onChange={e => setSkillFilter(e.target.value)}
-                className="w-full text-xs bg-white/5 border border-white/10 rounded-md pl-6 pr-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 appearance-none cursor-pointer"
-              >
-                <option value="">All roles</option>
-                {allSkills.map(sk => (
-                  <option key={sk} value={sk}>{sk}</option>
-                ))}
-              </select>
+        {viewMode === 'post' && sidebarOpen && (
+          <div className="w-64 shrink-0 flex flex-col border border-white/10 bg-card/60 backdrop-blur-xl rounded-xl overflow-hidden shadow-2xl animate-in slide-in-from-right duration-300">
+            <div className="p-3 border-b border-white/10 flex items-center justify-between bg-white/5">
+              <div className="flex items-center gap-2">
+                <Users className="w-3.5 h-3.5 text-indigo-400" />
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-300">Personnel</span>
+              </div>
+              <Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-red-500/20 hover:text-red-400 rounded-full" onClick={() => setSidebarOpen(false)}>
+                <PanelRightClose className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+            
+            {/* Search + Skill filter */}
+            <div className="p-3 space-y-2 border-b border-white/5 bg-slate-900/20">
+              <input
+                type="text"
+                placeholder="Search name..."
+                value={soldierFilter}
+                onChange={e => setSoldierFilter(e.target.value)}
+                className="w-full text-[11px] bg-white/5 border border-white/10 rounded-md px-2.5 py-1.5 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 transition-all"
+              />
+              <div className="relative">
+                <Filter className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500 pointer-events-none" />
+                <select
+                  value={skillFilter}
+                  onChange={e => setSkillFilter(e.target.value)}
+                  className="w-full text-[11px] bg-white/5 border border-white/10 rounded-md pl-7 pr-2 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 appearance-none cursor-pointer"
+                >
+                  <option value="">All roles</option>
+                  {allSkills.map(sk => (
+                    <option key={sk} value={sk}>{sk}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Soldier list */}
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-1.5 space-y-1">
+              {filteredSoldiers.map(s => (
+                <div
+                  key={s.id}
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, s)}
+                  className="flex items-center gap-2 px-3 py-2.5 rounded-lg cursor-grab active:cursor-grabbing bg-white/[0.03] hover:bg-indigo-500/20 border border-white/5 hover:border-indigo-500/40 transition-all duration-200 group select-none shadow-sm"
+                >
+                  <GripVertical className="w-3.5 h-3.5 text-white/10 group-hover:text-indigo-400 transition-colors shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[11px] font-bold text-slate-200 truncate block">{s.name}</span>
+                    {s.skills && s.skills.length > 0 && (
+                      <span className="text-[9px] text-slate-500 truncate block mt-0.5">{s.skills.join(' · ')}</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {filteredSoldiers.length === 0 && (
+                <div className="text-center py-10">
+                  <User className="w-8 h-8 text-slate-700 mx-auto mb-2 opacity-20" />
+                  <p className="text-slate-500 text-[10px] font-medium">No matches found</p>
+                </div>
+              )}
+            </div>
+            
+            <div className="p-2.5 border-t border-white/10 bg-white/5 text-center">
+               <span className="text-[9px] font-bold text-slate-500 uppercase tracking-tighter">{filteredSoldiers.length} Available Personnel</span>
             </div>
           </div>
-          {/* Soldier list */}
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-1.5 space-y-0.5">
-            {filteredSoldiers.map(s => (
-              <div
-                key={s.id}
-                draggable
-                onDragStart={(e) => handleDragStart(e, s)}
-                className="flex items-center gap-2 px-2.5 py-2 rounded-lg cursor-grab active:cursor-grabbing bg-white/[0.02] hover:bg-indigo-500/10 border border-transparent hover:border-indigo-500/30 transition-all duration-200 group select-none"
-              >
-                <GripVertical className="w-3 h-3 text-white/20 group-hover:text-indigo-400 transition-colors shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <span className="text-xs font-medium text-slate-200 truncate block">{s.name}</span>
-                  {s.skills && s.skills.length > 0 && (
-                    <span className="text-[10px] text-slate-500 truncate block">{s.skills.join(', ')}</span>
-                  )}
-                </div>
-              </div>
-            ))}
-            {filteredSoldiers.length === 0 && (
-              <div className="text-center py-6 text-slate-500 text-xs">No matching soldiers</div>
-            )}
-          </div>
-          <div className="p-2 border-t border-white/10 text-center">
-             <span className="text-[10px] text-slate-500">{filteredSoldiers.length} soldiers</span>
-          </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Reassignment Dialog (fallback) */}
       <Dialog open={isReassignOpen} onOpenChange={setIsReassignOpen}>

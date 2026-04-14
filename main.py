@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from database import engine, Session as DBSession
 from models import Soldier, Post, Shift, Assignment, Skill, PostTemplateSlot, Unavailability
-from schedule import generate_shifts, solve_shift_assignment
+from schedule import generate_shifts, solve_shift_assignment, solve_shift_assignment_greedy
 from pydantic import BaseModel, field_validator
 from typing import List, Optional
 from datetime import datetime, timedelta
@@ -66,6 +66,7 @@ class SaveScheduleRequest(BaseModel):
 class DraftRequest(BaseModel):
     start_date: datetime
     end_date: datetime
+    algorithm: Optional[str] = "optimal"
 
 class UnavailabilityCreate(BaseModel):
     soldier_id: int
@@ -436,11 +437,19 @@ def draft_schedule(req: DraftRequest, db: Session = Depends(get_db)):
             joinedload(Assignment.soldier)
         ).all()
             
-        assignments = solve_shift_assignment(
-            shifts, soldiers, 
-            history_scores=history_scores, 
-            existing_assignments=existing_assignments
-        )
+        if req.algorithm == "greedy":
+            assignments = solve_shift_assignment_greedy(
+                shifts, soldiers, 
+                history_scores=history_scores, 
+                existing_assignments=existing_assignments,
+                session=db
+            )
+        else:
+            assignments = solve_shift_assignment(
+                shifts, soldiers, 
+                history_scores=history_scores, 
+                existing_assignments=existing_assignments
+            )
         if not assignments: return []
             
         return [{

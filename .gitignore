@@ -20,3 +20,4 @@ dist/
 
 # Brain/Geminni artifacts (optional, keep if you want them in git)
 #.gemini/
+data/
