@@ -74,7 +74,7 @@ const ConflictTooltip = ({ icon: Icon, color, message, warnings }) => {
 // Constraint validation engine
 // ---------------------------------------------------------------------------
 
-function validateAssignments(shifts, posts, soldiers) {
+function validateAssignments(shifts, posts, soldiers, unavailabilities = []) {
   const warnings = []; // { slotIndex, type, message }
 
   // Build lookups
@@ -103,6 +103,26 @@ function validateAssignments(shifts, posts, soldiers) {
     const post = postMap[slot.post_name];
     const requiredSkill = slot.skill;
 
+    const slotStart = new Date(slot.start);
+    const slotEnd = new Date(slot.end);
+
+    // 0. Unavailability check
+    if (soldier) {
+      for (const u of unavailabilities) {
+        if (u.soldier_id === soldier.id) {
+          const uStart = new Date(u.start_datetime);
+          const uEnd = new Date(u.end_datetime);
+          if (slotStart < uEnd && uStart < slotEnd) {
+            warnings.push({
+              slotIndex: idx,
+              type: 'unavailability',
+              message: `${soldier.name} is unavailable: ${u.reason || 'No specific reason given'}`,
+            });
+          }
+        }
+      }
+    }
+
     // 1. Skill mismatch
     if (soldier && requiredSkill) {
       const hasSkill = soldier.skills && soldier.skills.includes(requiredSkill);
@@ -117,8 +137,6 @@ function validateAssignments(shifts, posts, soldiers) {
 
     // 2. Overlapping shifts & 3. Cooldown violation (check against same soldier's other shifts)
     if (soldier && bySoldier[slot.soldier_id]) {
-      const slotStart = new Date(slot.start);
-      const slotEnd = new Date(slot.end);
       const cooldownHours = post ? post.cooldown_hours : 0;
 
       for (const other of bySoldier[slot.soldier_id]) {
@@ -150,7 +168,7 @@ function validateAssignments(shifts, posts, soldiers) {
         const gap = (otherStart - slotEnd) / (1000 * 60 * 60); // hours
         const reverseGap = (slotStart - otherEnd) / (1000 * 60 * 60);
 
-        if (gap > 0 && gap < cooldownHours && idx < other.idx) {
+        if (gap >= 0 && gap < cooldownHours && idx < other.idx) {
           warnings.push({
             slotIndex: idx,
             type: 'cooldown',
@@ -162,7 +180,7 @@ function validateAssignments(shifts, posts, soldiers) {
             message: `Only ${gap.toFixed(1)}h rest after ${slot.post_name} (needs ${cooldownHours}h cooldown)`,
           });
         }
-        if (reverseGap > 0 && reverseGap < otherCooldownHours && idx < other.idx) {
+        if (reverseGap >= 0 && reverseGap < otherCooldownHours && idx < other.idx) {
           warnings.push({
             slotIndex: other.idx,
             type: 'cooldown',
@@ -253,7 +271,7 @@ export default function Scheduler() {
   };
 
   // --- Constraint validation ---
-  const warnings = useMemo(() => validateAssignments(shifts, posts, soldiers), [shifts, posts, soldiers]);
+  const warnings = useMemo(() => validateAssignments(shifts, posts, soldiers, unavailabilities), [shifts, posts, soldiers, unavailabilities]);
   const warningMap = useMemo(() => buildWarningMap(warnings), [warnings]);
 
   // Fetch candidates when dialog opens
@@ -516,7 +534,7 @@ export default function Scheduler() {
   const totalSlots = shifts.length;
   const filledSlots = shifts.filter(s => s.soldier_id != null).length;
   const emptySlots = totalSlots - filledSlots;
-  const warningCount = new Set(warnings.map(w => w.slotIndex)).size;
+  const warningCount = isDraft ? new Set(warnings.map(w => w.slotIndex)).size : 0;
 
   return (
     <div className="flex flex-col h-[calc(100vh-100px)] gap-4 p-4 overflow-hidden">
@@ -691,7 +709,7 @@ export default function Scheduler() {
                           const isEmpty = shift.soldier_id == null;
                           const slotKey = `${shift.post_name}|${shift.start}|${shift.role_id}`;
                           const slotWarnings = warningMap[shift.originalIndex];
-                          const hasWarning = slotWarnings && slotWarnings.length > 0;
+                          const hasWarning = isDraft && slotWarnings && slotWarnings.length > 0;
 
                           if (isEmpty && viewMode === 'post') {
                             return (
