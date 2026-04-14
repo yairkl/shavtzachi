@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from database import Post, Soldier, Skill, PostTemplateSlot, Shift
 from schedule import generate_shifts, solve_shift_assignment
 
@@ -58,7 +58,7 @@ def test_respect_cooldown_with_multiple_soldiers(db, skill_consecutive):
     Scenario: 2 back-to-back shifts, 2 soldiers, 4h cooldown.
     Each soldier should get 1 shift to avoid cooldown violation.
     """
-    post = Post(name="Gate", shift_length=timedelta(hours=4), cooldown=timedelta(hours=4), intensity_weight=1.0)
+    post = Post(name="Gate", shift_length=timedelta(hours=4), start_time=time(0,0), cooldown=timedelta(hours=4), intensity_weight=1.0)
     db.add(post)
     db.add(PostTemplateSlot(post=post, role_index=0, skill=skill_consecutive))
     
@@ -92,7 +92,7 @@ def test_allow_consecutive_with_zero_cooldown(db, skill_consecutive):
     Scenario: 2 back-to-back shifts, 1 soldier, 0h cooldown.
     Same soldier should be assigned to both.
     """
-    post = Post(name="Gate Zero", shift_length=timedelta(hours=4), cooldown=timedelta(hours=0), intensity_weight=1.0)
+    post = Post(name="Gate Zero", shift_length=timedelta(hours=4), start_time=time(0,0), cooldown=timedelta(hours=0), intensity_weight=1.0)
     db.add(post)
     db.add(PostTemplateSlot(post=post, role_index=0, skill=skill_consecutive))
     
@@ -152,10 +152,10 @@ def test_enforce_cooldown_between_different_posts(db, skill_consecutive):
     """
     Scenario: Post A (0-4) and Post B (4-8), 2 soldiers, 4h cooldown.
     """
-    p1 = Post(name="Post A", shift_length=timedelta(hours=4), cooldown=timedelta(hours=4), intensity_weight=1.0)
+    p1 = Post(name="Post A", shift_length=timedelta(hours=4), start_time=time(0,0), cooldown=timedelta(hours=4), intensity_weight=1.0)
     db.add(p1); db.add(PostTemplateSlot(post=p1, role_index=0, skill=skill_consecutive))
     
-    p2 = Post(name="Post B", shift_length=timedelta(hours=4), cooldown=timedelta(hours=4), intensity_weight=1.0)
+    p2 = Post(name="Post B", shift_length=timedelta(hours=4), start_time=time(0,0), cooldown=timedelta(hours=4), intensity_weight=1.0)
     db.add(p2); db.add(PostTemplateSlot(post=p2, role_index=0, skill=skill_consecutive))
     
     s1 = Soldier(name="Soldier A")
@@ -189,7 +189,7 @@ def test_multi_call_cooldown_persistence(db, skill_consecutive):
     Round 2: Shift is 04:00-08:00. 2 soldiers available.
     Soldier 2 should be assigned to respect S1's cooldown from Round 1.
     """
-    post = Post(name="MultiCallGate", shift_length=timedelta(hours=4), cooldown=timedelta(hours=4), intensity_weight=1.0)
+    post = Post(name="MultiCallGate", shift_length=timedelta(hours=4), start_time=time(0,0), cooldown=timedelta(hours=4), intensity_weight=1.0)
     db.add(post); db.add(PostTemplateSlot(post=post, role_index=0, skill=skill_consecutive))
     
     s1 = Soldier(name="Veteran S1")
@@ -222,3 +222,50 @@ def test_multi_call_cooldown_persistence(db, skill_consecutive):
     assert len(assignments2) == 1
     # S2 should be chosen over S1
     assert assignments2[0].soldier_id == s2.id
+
+
+def test_multiday_shift_recurrence_and_stability(db):
+    """
+    Scenario: A 48-hour mission.
+    1. Should hit exact alignment with 2025-01-01 when anchored at 2024-01-01.
+    2. Should appear on multiple day views (Day 1 and Day 2).
+    3. Should correctly generate the next back-to-back shift on Day 3.
+    """
+    skill = Skill(name="multiday_skill")
+    db.add(skill)
+    post = Post(
+        name="LongMission", 
+        shift_length=timedelta(hours=48),
+        start_time=datetime.strptime("06:00", "%H:%M").time(),
+        end_time=datetime.strptime("06:00", "%H:%M").time()
+    )
+    db.add(post)
+    db.add(PostTemplateSlot(post=post, role_index=0, skill=skill))
+    db.commit()
+
+    # Day 1: 2025-01-01 06:00 to 2025-01-02 06:00
+    start1 = datetime(2025, 1, 1, 6, 0)
+    end1 = datetime(2025, 1, 2, 6, 0)
+    shifts1 = generate_shifts([post], start1, end1)
+    
+    # Day 1 should see Shift A (Starts Jan 1st 06:00)
+    assert len(shifts1) == 1
+    assert shifts1[0].start == datetime(2025, 1, 1, 6, 0)
+    assert shifts1[0].end == datetime(2025, 1, 3, 6, 0)
+    
+    # Day 2: 2025-01-02 06:00 to 2025-01-03 06:00
+    # Day 2 should ALSO see Shift A (still ongoing)
+    start2 = datetime(2025, 1, 2, 6, 0)
+    end2 = datetime(2025, 1, 3, 6, 0)
+    shifts2 = generate_shifts([post], start2, end2)
+    assert len(shifts2) == 1
+    assert shifts2[0].start == datetime(2025, 1, 1, 6, 0)
+    
+    # Day 3: 2025-01-03 06:00 to 2025-01-04 06:00
+    # Day 3 should see Shift B (Starts Jan 3rd 06:00)
+    start3 = datetime(2025, 1, 3, 6, 0)
+    end3 = datetime(2025, 1, 4, 6, 0)
+    shifts3 = generate_shifts([post], start3, end3)
+    assert len(shifts3) == 1
+    assert shifts3[0].start == datetime(2025, 1, 3, 6, 0)
+    assert shifts3[0].end == datetime(2025, 1, 5, 6, 0)

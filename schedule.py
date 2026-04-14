@@ -26,7 +26,25 @@ def generate_shifts(posts, start_date, end_date, session=None):
     end_date = end_date.replace(microsecond=0)
     
     for post in posts:
-        current_day = (start_date - timedelta(days=1)).replace(hour=0, minute=0, second=0)
+        # Stable lookback: align the generation to a fixed anchor using multiples of shift_length.
+        # This ensures the sequence of shifts is identical regardless of the requested window.
+        anchor = datetime(2024, 1, 1, post.start_time.hour, post.start_time.minute, post.start_time.second)
+        
+        # Find a safe starting point before the requested window
+        lookback_target = start_date - timedelta(days=int(post.shift_length.total_seconds() // 86400) + 2)
+        
+        # Calculate shifts to skip from anchor to reach lookback_target
+        delta_seconds = (lookback_target - anchor).total_seconds()
+        shift_length_seconds = post.shift_length.total_seconds()
+        shifts_to_skip = int(delta_seconds // shift_length_seconds)
+        
+        # The first shift in our sequence
+        current_shift_start = anchor + timedelta(seconds=shifts_to_skip * shift_length_seconds)
+        
+        # We still use the daily-oriented loop structure for compatibility with non-24/7 posts,
+        # but we anchor the current_day and inner start times.
+        current_day = current_shift_start.replace(hour=0, minute=0, second=0)
+
         while current_day < end_date:
             active_start = current_day.replace(hour=post.start_time.hour, minute=post.start_time.minute, second=post.start_time.second)
             
@@ -35,23 +53,38 @@ def generate_shifts(posts, start_date, end_date, session=None):
             else:
                 active_end = current_day.replace(hour=post.end_time.hour, minute=post.end_time.minute, second=post.end_time.second)
                 
-            current_shift_start = active_start
+            # If our sequence start is already beyond the day's active window, move next.
+            # But normally we align current_shift_start with active_start.
+            if current_shift_start < active_start:
+                 current_shift_start = active_start
+
             while current_shift_start < active_end:
                 current_shift_end = current_shift_start + post.shift_length
                 
-                if current_shift_start >= start_date and current_shift_start < end_date:
-                    shift = Shift(post=post, post_name=post.name, start=current_shift_start, end=current_shift_end)
-                    shifts.append(shift)
-                    if session:
-                        existing = session.query(Shift).filter(Shift.post_name==post.name, Shift.start==shift.start).first()
-                        if not existing: session.add(shift)
-                        else: shifts[-1] = existing
+                # REFINED logic for display: include any shift that OVERLAPS with the requested range
+                if current_shift_start < end_date and current_shift_end > start_date:
+                    # Deduplicate based on post and start time
+                    if not any(s.post_name == post.name and s.start == current_shift_start for s in shifts):
+                        shift = Shift(post=post, post_name=post.name, start=current_shift_start, end=current_shift_end)
+                        shifts.append(shift)
+                        if session:
+                            existing = session.query(Shift).filter(Shift.post_name==post.name, Shift.start==current_shift_start).first()
+                            if not existing: session.add(shift)
+                            else: shifts[-1] = existing
                 
                 current_shift_start = current_shift_end
-                
-            current_day += timedelta(days=1)
+            
+            # For multiday shifts, skip days already covered by the ongoing shift.
+            if current_shift_start > active_end:
+                # Fast-forward to the day of the next potential start, ensuring we always progress at least one day.
+                new_day = current_shift_start.replace(hour=0, minute=0, second=0)
+                current_day = max(current_day + timedelta(days=1), new_day)
+            else:
+                current_day += timedelta(days=1)
     
     if session: session.commit()
+    # Sort for deterministic output
+    shifts.sort(key=lambda s: (s.post_name, s.start))
     return shifts
 
 # ---------------------------------------------------------------------------

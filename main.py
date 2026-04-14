@@ -474,27 +474,40 @@ def save_schedule(req: SaveScheduleRequest, db: Session = Depends(get_db)):
         start_naive = req.start_date.replace(tzinfo=None)
         end_naive = req.end_date.replace(tzinfo=None)
 
-        # Clear existing assignments in this range
-        shifts_to_clear = db.query(Shift.id).filter(Shift.start >= start_naive, Shift.start < end_naive).all()
-        shift_ids = [s[0] for s in shifts_to_clear]
-        if shift_ids:
-            db.query(Assignment).filter(Assignment.shift_id.in_(shift_ids)).delete(synchronize_session=False)
-
-        # Ensure shifts exist for this range
+        # 1. Identify all shifts overlapping this range
         posts = db.query(Post).all()
         all_shifts = generate_shifts(posts, start_naive, end_naive, session=db)
         # Build map for quick lookup: (post_name, start_iso) -> shift_id
-        # Truncate microseconds for consistent lookup
         shift_lookup = {(s.post_name, s.start.replace(microsecond=0).isoformat()): s.id for s in all_shifts}
 
-        # Create new assignments from the request
+        # 2. Identify which shifts to clear assignments for:
+        # - Shifts that start within the window (standard clear)
+        # - Shifts mentioned in the payload (to avoid UNIQUE constraint errors for crossing shifts)
+        shift_ids_to_clear = {s.id for s in all_shifts if s.start >= start_naive and s.start < end_naive}
+        
+        # Map payload entries to shift IDs and add them to clear list
+        payload_with_sids = []
         for a_data in req.assignments:
             start_iso = a_data.start.replace(tzinfo=None, microsecond=0).isoformat()
             sid = shift_lookup.get((a_data.post_name, start_iso))
             if sid:
-                db.add(Assignment(soldier_id=a_data.soldier_id, shift_id=sid, role_id=a_data.role_id))
+                shift_ids_to_clear.add(sid)
+                payload_with_sids.append((sid, a_data))
             else:
                 logger.warning(f"Could not find shift for {a_data.post_name} at {start_iso}")
+
+        if shift_ids_to_clear:
+            db.query(Assignment).filter(Assignment.shift_id.in_(list(shift_ids_to_clear))).delete(synchronize_session=False)
+
+        # 3. Create new assignments from the request
+        seen_assignments = set()
+        for sid, a_data in payload_with_sids:
+            # Deduplicate to prevent UNIQUE constraint errors if payload contains same soldier/shift twice
+            if (a_data.soldier_id, sid) in seen_assignments:
+                logger.warning(f"Duplicate assignment detected in payload for soldier {a_data.soldier_id} in shift {sid}. Skipping.")
+                continue
+            db.add(Assignment(soldier_id=a_data.soldier_id, shift_id=sid, role_id=a_data.role_id))
+            seen_assignments.add((a_data.soldier_id, sid))
         
         db.commit()
         return {"status": "success"}
