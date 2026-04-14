@@ -390,9 +390,18 @@ export default function Scheduler() {
     e.dataTransfer.effectAllowed = 'copy';
   };
 
+  const handleShiftDragStart = (e, shift, index) => {
+    if (shift.soldier_id == null) return;
+    e.dataTransfer.setData('application/json', JSON.stringify({ 
+      soldier_id: shift.soldier_id, 
+      soldier_name: shift.soldier_name,
+      sourceIndex: index 
+    }));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
   const handleDragOver = (e, slotKey) => {
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
     setDragOverSlotKey(slotKey);
   };
 
@@ -407,6 +416,10 @@ export default function Scheduler() {
       const data = JSON.parse(e.dataTransfer.getData('application/json'));
       setShifts(prev => {
         const newShifts = [...prev];
+        // If it's a move from another shift, clear the source
+        if (data.sourceIndex !== undefined && data.sourceIndex !== slotIndex) {
+          newShifts[data.sourceIndex] = { ...newShifts[data.sourceIndex], soldier_id: null, soldier_name: null };
+        }
         newShifts[slotIndex] = { ...newShifts[slotIndex], soldier_id: data.soldier_id, soldier_name: data.soldier_name };
         return newShifts;
       });
@@ -743,17 +756,23 @@ export default function Scheduler() {
                           return (
                             <div 
                                key={`${res.id}-${shift.originalIndex}-${shift.id || shift.originalIndex}`}
+                               draggable={!isUnavail}
+                               onDragStart={(e) => handleShiftDragStart(e, shift, shift.originalIndex)}
+                               onDragOver={(e) => !isUnavail && handleDragOver(e, slotKey)}
+                               onDragLeave={handleDragLeave}
+                               onDrop={(e) => !isUnavail && handleDrop(e, shift.originalIndex)}
                                onClick={() => !isUnavail && handleShiftClick(shift, shift.originalIndex)}
                                style={{ left: styleInfo.left, width: styleInfo.width }}
                                className={cn(
                                  "absolute top-1 bottom-1 p-2 rounded-lg text-xs leading-tight transition-all duration-300 overflow-hidden backdrop-blur shadow-lg group/shift",
+                                 dragOverSlotKey === slotKey && !isUnavail && "ring-2 ring-white scale-[1.02] z-20 shadow-xl",
                                  isUnavail
                                    ? "bg-slate-800/60 border border-slate-700 text-slate-400 cursor-not-allowed"
                                    : hasWarning
-                                     ? "bg-red-500/20 border border-red-500/60 hover:bg-red-500/30 text-red-100 shadow-red-900/30 ring-1 ring-red-500/30 cursor-pointer hover:scale-[1.02] hover:z-10"
+                                     ? "bg-red-500/20 border border-red-500/60 hover:bg-red-500/30 text-red-100 shadow-red-900/30 ring-1 ring-red-500/30 cursor-grab active:cursor-grabbing hover:scale-[1.02] hover:z-10"
                                      : isDraft
-                                       ? "bg-amber-500/20 border border-amber-500/50 hover:bg-amber-500/30 text-amber-200 shadow-amber-900/20 cursor-pointer hover:scale-[1.02] hover:z-10"
-                                       : "bg-indigo-500/20 border border-indigo-500/50 hover:bg-indigo-500/30 text-indigo-100 shadow-indigo-900/20 cursor-pointer hover:scale-[1.02] hover:z-10",
+                                       ? "bg-amber-500/20 border border-amber-500/50 hover:bg-amber-500/30 text-amber-200 shadow-amber-900/20 cursor-grab active:cursor-grabbing hover:scale-[1.02] hover:z-10"
+                                       : "bg-indigo-500/20 border border-indigo-500/50 hover:bg-indigo-500/30 text-indigo-100 shadow-indigo-900/20 cursor-grab active:cursor-grabbing hover:scale-[1.02] hover:z-10",
                                  styleInfo.clippedStart && "rounded-l-none border-l-0",
                                  styleInfo.clippedEnd && "rounded-r-none border-r-0"
                                )}
