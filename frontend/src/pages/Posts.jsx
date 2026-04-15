@@ -1,5 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { getPosts, createPost, updatePost, deletePost, exportPosts, importPosts, getSkills } from '@/services/api';
+import { DateTimeRangePicker } from '@/components/DateTimeRangePicker';
+import { format, parseISO } from 'date-fns';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -36,8 +38,14 @@ export default function Posts() {
     cooldown_hours: 0,
     intensity_weight: 1.0,
     slots: ["soldier"],
-    is_active: true
+    is_active: true,
+    active_from: "",
+    active_until: ""
   });
+  const [activeDateRange, setActiveDateRange] = useState({ from: undefined, to: undefined });
+  const [activeStartTime, setActiveStartTime] = useState("06:00");
+  const [activeEndTime, setActiveEndTime] = useState("05:59");
+  
   const fileInputRef = useRef(null);
 
   const fetchData = async () => {
@@ -90,7 +98,10 @@ export default function Posts() {
 
   const handleOpenAdd = () => {
     setEditingPost(null);
-    setFormData({ name: "", shift_length_hours: 4, start_time: "06:00", end_time: "05:59", cooldown_hours: 0, intensity_weight: 1.0, slots: [availableSkills[0] || ""], is_active: true });
+    setFormData({ name: "", shift_length_hours: 4, start_time: "06:00", end_time: "05:59", cooldown_hours: 0, intensity_weight: 1.0, slots: [availableSkills[0] || ""], is_active: true, active_from: "", active_until: "" });
+    setActiveDateRange({ from: undefined, to: undefined });
+    setActiveStartTime("06:00");
+    setActiveEndTime("05:59");
     setIsDialogOpen(true);
   };
 
@@ -104,15 +115,43 @@ export default function Posts() {
         cooldown_hours: post.cooldown_hours,
         intensity_weight: post.intensity_weight,
         is_active: post.is_active,
+        active_from: post.active_from || "",
+        active_until: post.active_until || "",
         slots: post.slots.sort((a,b) => a.role_index - b.role_index).map(s => s.skill)
     });
+
+    if (post.active_from) {
+        const start = parseISO(post.active_from);
+        const end = post.active_until ? parseISO(post.active_until) : null;
+        setActiveDateRange({ from: start, to: end || undefined });
+        setActiveStartTime(format(start, "HH:mm"));
+        if (end) setActiveEndTime(format(end, "HH:mm"));
+    } else {
+        setActiveDateRange({ from: undefined, to: undefined });
+    }
+    
     setIsDialogOpen(true);
   };
 
   const handleSave = async () => {
     try {
-        if (editingPost) await updatePost(editingPost.name, formData);
-        else await createPost(formData);
+        const finalData = { ...formData };
+        if (activeDateRange?.from) {
+            const sd = format(activeDateRange.from, "yyyy-MM-dd");
+            finalData.active_from = `${sd}T${activeStartTime}:00`;
+            if (activeDateRange.to) {
+                const ed = format(activeDateRange.to, "yyyy-MM-dd");
+                finalData.active_until = `${ed}T${activeEndTime}:00`;
+            } else {
+                finalData.active_until = null;
+            }
+        } else {
+            finalData.active_from = null;
+            finalData.active_until = null;
+        }
+
+        if (editingPost) await updatePost(editingPost.name, finalData);
+        else await createPost(finalData);
         setIsDialogOpen(false);
         fetchData();
     } catch (error) { console.error("Error saving post:", error); }
@@ -165,6 +204,15 @@ export default function Posts() {
                   <div className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" /> {post.shift_length_hours}h</div>
                   <div className="flex items-center gap-1.5 border-l border-border/50 pl-4"><RefreshCw className="w-3.5 h-3.5" /> {post.cooldown_hours}h CD</div>
                 </div>
+                {(post.active_from || post.active_until) && (
+                  <div className="text-[10px] text-amber-400 bg-amber-400/5 p-2 rounded-lg border border-amber-400/20 space-y-1">
+                    <p className="font-bold flex items-center gap-1.5 uppercase tracking-wider opacity-80"><Clock className="w-3 h-3"/> Active Period</p>
+                    <div className="grid grid-cols-2 gap-2 opacity-90">
+                       <div><span className="opacity-50 font-mono">FR:</span> {post.active_from ? new Date(post.active_from).toLocaleDateString() : '∞'}</div>
+                       <div><span className="opacity-50 font-mono">TO:</span> {post.active_until ? new Date(post.active_until).toLocaleDateString() : '∞'}</div>
+                    </div>
+                  </div>
+                )}
                 <div className="space-y-2">
                   <h4 className="text-[9px] font-extrabold uppercase text-muted-foreground tracking-[0.2em] flex items-center gap-1.5 opacity-60">
                     <ShieldCheck className="w-3 h-3" /> Required Slots
@@ -239,6 +287,17 @@ export default function Posts() {
                         </div>
                     </div>
                 </div>
+            </div>
+            
+            <div className="space-y-4 pb-4 border-b border-border/10">
+                <Label className="text-[10px] uppercase opacity-60 font-black tracking-[0.2em]">Post Active Period (Optional)</Label>
+                <DateTimeRangePicker 
+                  date={activeDateRange} setDate={setActiveDateRange}
+                  startTime={activeStartTime} setStartTime={setActiveStartTime}
+                  endTime={activeEndTime} setEndTime={setActiveEndTime}
+                  placeholder="Permanent / No range"
+                />
+                <p className="text-[9px] text-muted-foreground italic">Leave unselected for permanent posts.</p>
             </div>
             
             <div className="space-y-3 pt-2">

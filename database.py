@@ -117,7 +117,7 @@ class ShavtzachiDB:
     def get_post_by_name(self, name: str) -> Optional[Post]:
         return self.session.query(Post).filter(Post.name == name).first()
 
-    def create_post(self, name: str, shift_length_hours: float, start_time: time, end_time: time, cooldown_hours: float, intensity_weight: float, slots: List[str], is_active: bool = True) -> bool:
+    def create_post(self, name: str, shift_length_hours: float, start_time: time, end_time: time, cooldown_hours: float, intensity_weight: float, slots: List[str], is_active: bool = True, active_from: Optional[datetime] = None, active_until: Optional[datetime] = None) -> bool:
         post = Post(
             name=name,
             shift_length=timedelta(hours=shift_length_hours),
@@ -125,7 +125,9 @@ class ShavtzachiDB:
             end_time=end_time,
             cooldown=timedelta(hours=cooldown_hours),
             intensity_weight=intensity_weight,
-            is_active=1 if is_active else 0
+            is_active=1 if is_active else 0,
+            active_from=active_from,
+            active_until=active_until
         )
         for i, sk_name in enumerate(slots):
             skill = self.get_or_create_skill(sk_name)
@@ -134,7 +136,7 @@ class ShavtzachiDB:
         self.session.commit()
         return True
 
-    def update_post(self, name: str, shift_length_hours: float, start_time: time, end_time: time, cooldown_hours: float, intensity_weight: float, slots: List[str], is_active: bool = True) -> bool:
+    def update_post(self, name: str, shift_length_hours: float, start_time: time, end_time: time, cooldown_hours: float, intensity_weight: float, slots: List[str], is_active: bool = True, active_from: Optional[datetime] = None, active_until: Optional[datetime] = None) -> bool:
         post = self.get_post_by_name(name)
         if not post:
             return False
@@ -144,6 +146,8 @@ class ShavtzachiDB:
         post.cooldown = timedelta(hours=cooldown_hours)
         post.intensity_weight = intensity_weight
         post.is_active = 1 if is_active else 0
+        post.active_from = active_from
+        post.active_until = active_until
         
         self.session.query(PostTemplateSlot).filter(PostTemplateSlot.post_name == name).delete()
         for i, sk_name in enumerate(slots):
@@ -274,27 +278,8 @@ class ShavtzachiDB:
         end_naive = end_date.replace(tzinfo=None)
         
         posts = self.get_active_posts()
-        required_by_skill = defaultdict(float)
-        
-        for post in posts:
-            l = post.shift_length.total_seconds() / 3600
-            c = post.cooldown.total_seconds() / 3600
-            ratio = (l + c) / l if l > 0 else 1.0
-            
-            if post.start_time < post.end_time:
-                active_hours = (datetime.combine(datetime.min, post.end_time) - datetime.combine(datetime.min, post.start_time)).total_seconds() / 3600
-            else:
-                active_hours = 24 - (datetime.combine(datetime.min, post.start_time) - datetime.combine(datetime.min, post.end_time)).total_seconds() / 3600
-            
-            active_ratio = active_hours / 24.0
-            sustenance_needed = ratio * active_ratio
-            
-            for slot in post.slots:
-                required_by_skill[slot.skill.name] += sustenance_needed
-
         soldiers = self.get_all_soldiers(include_unavailabilities=True)
-        skills = self.get_all_skills()
-        all_skills = [sk.name for sk in skills]
+        all_skills = [sk.name for sk in self.get_all_skills()]
         
         results = []
         current_date = start_naive
@@ -306,6 +291,30 @@ class ShavtzachiDB:
             day_start = datetime.combine(current_date.date(), datetime.min.time())
             day_end = day_start + timedelta(days=1)
             
+            # Filter posts active on this day
+            daily_posts = []
+            for p in posts:
+                if p.active_from and p.active_from >= day_end: continue
+                if p.active_until and p.active_until <= day_start: continue
+                daily_posts.append(p)
+
+            required_by_skill = defaultdict(float)
+            for post in daily_posts:
+                l = post.shift_length.total_seconds() / 3600
+                c = post.cooldown.total_seconds() / 3600
+                ratio = (l + c) / l if l > 0 else 1.0
+                
+                if post.start_time < post.end_time:
+                    active_hours = (datetime.combine(datetime.min, post.end_time) - datetime.combine(datetime.min, post.start_time)).total_seconds() / 3600
+                else:
+                    active_hours = 24 - (datetime.combine(datetime.min, post.start_time) - datetime.combine(datetime.min, post.end_time)).total_seconds() / 3600
+                
+                active_ratio = active_hours / 24.0
+                sustenance_needed = ratio * active_ratio
+                
+                for slot in post.slots:
+                    required_by_skill[slot.skill.name] += sustenance_needed
+
             total_pool_by_skill = defaultdict(int)
             for s in soldiers:
                 for sk in s.skills:
@@ -355,7 +364,7 @@ class ShavtzachiDB:
                 })
                 
             results.append({
-                "date": current_date.isoformat(),
+                "date": current_date.date().isoformat(),
                 "report": day_report
             })
             current_date += timedelta(days=1)

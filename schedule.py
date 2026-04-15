@@ -26,6 +26,10 @@ def generate_shifts(posts, start_date, end_date, db: Optional[ShavtzachiDB] = No
     end_date = end_date.replace(microsecond=0)
     
     for post in posts:
+        # Check if the post is active within the overall requested window
+        if post.active_from and post.active_from >= end_date: continue
+        if post.active_until and post.active_until <= start_date: continue
+
         # Stable lookback: align the generation to a fixed anchor using multiples of shift_length.
         # This ensures the sequence of shifts is identical regardless of the requested window.
         anchor = datetime(2024, 1, 1, post.start_time.hour, post.start_time.minute, post.start_time.second)
@@ -60,6 +64,7 @@ def generate_shifts(posts, start_date, end_date, db: Optional[ShavtzachiDB] = No
 
             while current_shift_start < active_end:
                 current_shift_end = current_shift_start + post.shift_length
+                print(f"DEBUG: Checking shift {current_shift_start} - {current_shift_end}")
                 
                 # Logic for display vs logic for solver/tests:
                 # - include_overflow=True: include any shift that OVERLAPS with the requested range
@@ -68,6 +73,17 @@ def generate_shifts(posts, start_date, end_date, db: Optional[ShavtzachiDB] = No
                 is_starting_in_window = current_shift_start >= start_date and current_shift_start < end_date
                 
                 should_include = is_overlap if include_overflow else is_starting_in_window
+                
+                # respect temporary post limits
+                if should_include:
+                    if post.active_from:
+                        af = post.active_from.replace(tzinfo=None) if hasattr(post.active_from, 'replace') else post.active_from
+                        if current_shift_start < af:
+                            should_include = False
+                    if post.active_until:
+                        au = post.active_until.replace(tzinfo=None) if hasattr(post.active_until, 'replace') else post.active_until
+                        if current_shift_end > au:
+                            should_include = False
 
                 if should_include:
                     # Deduplicate based on post and start time

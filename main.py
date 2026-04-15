@@ -51,6 +51,8 @@ class PostCreate(BaseModel):
     intensity_weight: float
     slots: List[str]
     is_active: bool = True
+    active_from: Optional[datetime] = None
+    active_until: Optional[datetime] = None
 
 class AssignmentCreate(BaseModel):
     soldier_id: int
@@ -142,6 +144,8 @@ def get_posts(db: ShavtzachiDB = Depends(get_db)):
         "cooldown_hours": p.cooldown.total_seconds() / 3600,
         "intensity_weight": p.intensity_weight,
         "is_active": bool(p.is_active),
+        "active_from": p.active_from.isoformat() if p.active_from else None,
+        "active_until": p.active_until.isoformat() if p.active_until else None,
         "slots": [{"role_index": s.role_index, "skill": s.skill.name} for s in p.slots]
     } for p in posts]
 
@@ -155,7 +159,9 @@ def create_post(p_data: PostCreate, db: ShavtzachiDB = Depends(get_db)):
         p_data.cooldown_hours,
         p_data.intensity_weight,
         p_data.slots,
-        p_data.is_active
+        p_data.is_active,
+        p_data.active_from.replace(tzinfo=None) if p_data.active_from else None,
+        p_data.active_until.replace(tzinfo=None) if p_data.active_until else None
     )
     return {"status": "success"}
 
@@ -169,7 +175,9 @@ def update_post(name: str, p_data: PostCreate, db: ShavtzachiDB = Depends(get_db
         p_data.cooldown_hours,
         p_data.intensity_weight,
         p_data.slots,
-        p_data.is_active
+        p_data.is_active,
+        p_data.active_from.replace(tzinfo=None) if p_data.active_from else None,
+        p_data.active_until.replace(tzinfo=None) if p_data.active_until else None
     )
     if not success: raise HTTPException(status_code=404, detail="Post not found")
     return {"status": "success"}
@@ -215,10 +223,20 @@ async def import_soldiers(file: UploadFile = File(...), db: ShavtzachiDB = Depen
 def export_posts(db: ShavtzachiDB = Depends(get_db)):
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["name", "shift_length_hours", "start_time", "end_time", "cooldown_hours", "intensity_weight", "slots"])
+    writer.writerow(["name", "shift_length_hours", "start_time", "end_time", "cooldown_hours", "intensity_weight", "slots", "active_from", "active_until"])
     for p in db.get_all_posts():
         slots = ",".join([s.skill.name for s in sorted(p.slots, key=lambda x: x.role_index)])
-        writer.writerow([p.name, p.shift_length.total_seconds()/3600, p.start_time.strftime("%H:%M"), p.end_time.strftime("%H:%M"), p.cooldown.total_seconds()/3600, p.intensity_weight, slots])
+        writer.writerow([
+            p.name, 
+            p.shift_length.total_seconds()/3600, 
+            p.start_time.strftime("%H:%M"), 
+            p.end_time.strftime("%H:%M"), 
+            p.cooldown.total_seconds()/3600, 
+            p.intensity_weight, 
+            slots,
+            p.active_from.isoformat() if p.active_from else "",
+            p.active_until.isoformat() if p.active_until else ""
+        ])
     output.seek(0)
     return StreamingResponse(output, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=posts.csv"})
 
@@ -236,6 +254,9 @@ async def import_posts(file: UploadFile = File(...), db: ShavtzachiDB = Depends(
         post.end_time = datetime.strptime(row["end_time"], "%H:%M").time()
         post.cooldown = timedelta(hours=float(row["cooldown_hours"]))
         post.intensity_weight = float(row["intensity_weight"])
+        post.active_from = datetime.fromisoformat(row["active_from"]) if row.get("active_from") else None
+        post.active_until = datetime.fromisoformat(row["active_until"]) if row.get("active_until") else None
+        
         db.session.query(PostTemplateSlot).filter(PostTemplateSlot.post_name == post.name).delete()
         for i, sk_name in enumerate(row["slots"].split(",")):
             if not sk_name.strip(): continue

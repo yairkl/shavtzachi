@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { getSoldiers, getPosts, getShiftsWithAssignments, draftSchedule, saveSchedule, getCandidates, getUnavailabilities } from '@/services/api';
 import { Button } from '@/components/ui/button';
-import { Save, RefreshCw, ChevronLeft, ChevronRight, User, Users, LayoutGrid, CheckCircle2, GripVertical, Wand2, X, PanelRightClose, PanelRight, AlertTriangle, ShieldAlert, Filter, Ban, CalendarX, Clock4 } from 'lucide-react';
+import { Save, RefreshCw, ChevronLeft, ChevronRight, User, Users, LayoutGrid, CheckCircle2, GripVertical, Wand2, X, PanelRightClose, PanelRight, AlertTriangle, ShieldAlert, Filter, Ban, CalendarX, Clock4, ShieldCheck } from 'lucide-react';
 import { addDays, addHours, format, startOfToday, startOfDay, parseISO, isBefore, differenceInMinutes } from 'date-fns';
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -497,7 +497,19 @@ export default function Scheduler() {
         }
         groupMap.get(resId).shifts.push({ ...slot, originalIndex: idx });
       });
-      return Array.from(groupMap.values());
+      
+      const sortedResources = Array.from(groupMap.values()).sort((a, b) => {
+        if (a.name !== b.name) return a.name.localeCompare(b.name);
+        return a.id.localeCompare(b.id);
+      });
+
+      // Mark the first item in each group
+      let lastPost = null;
+      return sortedResources.map(res => {
+        const isFirst = res.name !== lastPost;
+        lastPost = res.name;
+        return { ...res, isFirstInGroup: isFirst };
+      });
     }
   }, [viewMode, soldiers, posts, shifts]);
 
@@ -707,12 +719,45 @@ export default function Scheduler() {
                    ))}
                 </div>
 
-                {resources.map((res) => (
-                  <div key={res.id} className="flex relative border-b border-white/5 hover:bg-white/[0.03] transition-colors group">
-                    <div className="w-56 shrink-0 sticky left-0 z-20 bg-card/80 backdrop-blur-md border-r border-white/10 p-3 flex flex-col justify-center shadow-[4px_0_12px_rgba(0,0,0,0.1)] group-hover:bg-card/90 transition-colors">
-                       <span className="font-medium text-sm text-slate-200 truncate">{res.name}</span>
-                       {res.subtitle && <span className="text-[10px] text-slate-500 truncate mt-0.5">{res.subtitle}</span>}
-                    </div>
+                {resources.map((res, resIdx) => (
+                  <React.Fragment key={res.id}>
+                    {/* Group Header Row */}
+                    {viewMode === 'post' && res.isFirstInGroup && (
+                      <div className="flex sticky left-0 z-30 bg-slate-900/80 border-y border-white/5 h-9 items-center pl-4 backdrop-blur-md">
+                         <span className="text-[10px] font-black uppercase tracking-[0.3em] text-indigo-400 flex items-center gap-3">
+                            <div className="p-1.5 bg-indigo-500/10 rounded-lg border border-indigo-500/20">
+                              <ShieldCheck className="w-3.5 h-3.5 shadow-[0_0_10px_rgba(99,102,241,0.4)]"/>
+                            </div>
+                            {res.name}
+                         </span>
+                         <div className="flex-1 h-[1px] bg-gradient-to-r from-indigo-500/20 to-transparent ml-6 opacity-50" />
+                      </div>
+                    )}
+                    
+                    <div className={cn(
+                      "flex relative border-b border-white/5 hover:bg-white/[0.03] transition-colors group",
+                      viewMode === 'post' && "border-l-4 border-l-transparent",
+                      viewMode === 'post' && !res.isFirstInGroup && "border-l-indigo-500/20"
+                    )}>
+                      <div className={cn(
+                        "w-56 shrink-0 sticky left-0 z-20 bg-card/80 backdrop-blur-md border-r border-white/10 p-3 flex flex-col justify-center shadow-[4px_0_12px_rgba(0,0,0,0.1)] group-hover:bg-card/90 transition-colors",
+                        viewMode === 'post' && "pl-6"
+                      )}>
+                         <span className={cn(
+                           "font-medium text-sm text-slate-200 truncate",
+                           viewMode === 'post' && "text-xs text-slate-400"
+                          )}>
+                           {viewMode === 'post' ? res.subtitle.split(' · ')[0] : res.name}
+                         </span>
+                         {res.subtitle && viewMode === 'post' && (
+                           <span className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mt-0.5 truncate bg-white/5 px-1.5 py-0.5 rounded border border-white/5 w-fit">
+                             {res.subtitle.split(' · ')[1]}
+                           </span>
+                         )}
+                         {res.subtitle && viewMode !== 'post' && (
+                           <span className="text-[10px] text-slate-500 truncate mt-0.5">{res.subtitle}</span>
+                         )}
+                      </div>
                     
                     <div className="flex-1 relative h-16 my-1">
                        {res.shifts.map(shift => {
@@ -805,8 +850,9 @@ export default function Scheduler() {
                        })}
                     </div>
                   </div>
-                ))}
-              </div>
+                </React.Fragment>
+              ))}
+            </div>
             </div>
           ) : (
             <div className="h-full flex flex-col items-center justify-center text-muted-foreground w-full py-24">
