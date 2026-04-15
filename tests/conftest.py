@@ -27,20 +27,21 @@ def test_setup():
 
 @pytest.fixture
 def db():
-    # Provide a session and ensure it is cleaned up between tests
+    # Provide a ShavtzachiDB instance and ensure data is cleaned up
     with database.Session() as session:
         # Clear data before each test
-        from models import Soldier, Post, Skill, Shift, Assignment, PostTemplateSlot, soldier_skill_table
+        from models import Soldier, Post, Skill, Shift, Assignment, PostTemplateSlot, soldier_skill_table, Unavailability
         session.execute(soldier_skill_table.delete())
         session.query(Assignment).delete()
         session.query(Shift).delete()
+        session.query(Unavailability).delete()
         session.query(PostTemplateSlot).delete()
         session.query(Post).delete()
         session.query(Soldier).delete()
         session.query(Skill).delete()
         session.commit()
         
-        yield session
+        yield database.ShavtzachiDB(session)
 
 @pytest.fixture(autouse=True)
 def override_get_db(db):

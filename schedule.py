@@ -1,7 +1,7 @@
 from datetime import datetime, time, timedelta
 import pandas as pd
 import numpy as np
-from database import engine, Session
+from database import engine, Session, ShavtzachiDB
 from models import Post, Soldier, Shift, Assignment, Unavailability
 from typing import List, Optional, Dict, Set, Tuple
 from ortools.sat.python import cp_model
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # Shift generation
 # ---------------------------------------------------------------------------
 
-def generate_shifts(posts, start_date, end_date, session=None):
+def generate_shifts(posts, start_date, end_date, db: Optional[ShavtzachiDB] = None, include_overflow: bool = False):
     shifts = []
     if isinstance(start_date, str): start_date = datetime.fromisoformat(start_date)
     if isinstance(end_date, str): end_date = datetime.fromisoformat(end_date)
@@ -61,16 +61,22 @@ def generate_shifts(posts, start_date, end_date, session=None):
             while current_shift_start < active_end:
                 current_shift_end = current_shift_start + post.shift_length
                 
-                # REFINED logic for display: include any shift that OVERLAPS with the requested range
-                if current_shift_start < end_date and current_shift_end > start_date:
+                # Logic for display vs logic for solver/tests:
+                # - include_overflow=True: include any shift that OVERLAPS with the requested range
+                # - include_overflow=False (default): only include shifts that START within the requested range (legacy behavior)
+                is_overlap = current_shift_start < end_date and current_shift_end > start_date
+                is_starting_in_window = current_shift_start >= start_date and current_shift_start < end_date
+                
+                should_include = is_overlap if include_overflow else is_starting_in_window
+
+                if should_include:
                     # Deduplicate based on post and start time
                     if not any(s.post_name == post.name and s.start == current_shift_start for s in shifts):
                         shift = Shift(post=post, post_name=post.name, start=current_shift_start, end=current_shift_end)
                         shifts.append(shift)
-                        if session:
-                            existing = session.query(Shift).filter(Shift.post_name==post.name, Shift.start==current_shift_start).first()
-                            if not existing: session.add(shift)
-                            else: shifts[-1] = existing
+                        if db:
+                            existing = db.get_or_create_shift(post, current_shift_start, current_shift_end)
+                            shifts[-1] = existing
                 
                 current_shift_start = current_shift_end
             
@@ -82,7 +88,7 @@ def generate_shifts(posts, start_date, end_date, session=None):
             else:
                 current_day += timedelta(days=1)
     
-    if session: session.commit()
+    if db: db.commit()
     # Sort for deterministic output
     shifts.sort(key=lambda s: (s.post_name, s.start))
     return shifts
@@ -669,7 +675,7 @@ def solve_shift_assignment(shifts: List[Shift], soldiers: List[Soldier],
 def solve_shift_assignment_greedy(shifts: List[Shift], soldiers: List[Soldier],
                                   history_scores: Optional[dict] = None,
                                   existing_assignments: Optional[List[Assignment]] = None,
-                                  session=None):
+                                  session: Optional[ShavtzachiDB] = None):
     """
     Assign soldiers to shifts using a greedy algorithm.
     Orders shifts by rarest qualifications and longest duration.
@@ -745,14 +751,7 @@ def solve_shift_assignment_greedy(shifts: List[Shift], soldiers: List[Soldier],
 
     results = []
     
-    # Use provided session or try to find one
-    session_to_use = session
-    if session_to_use is None:
-        from sqlalchemy.orm import object_session
-        session_to_use = object_session(soldiers[0]) if soldiers else None
-        if not session_to_use:
-            # Fallback (may be slow)
-            session_to_use = Session()
+    # db is now used directly via session parameter
 
     logger.info(f"Greedy Solver: Processing {len(shifts)} shifts for {len(soldiers)} soldiers.")
 
@@ -767,7 +766,7 @@ def solve_shift_assignment_greedy(shifts: List[Shift], soldiers: List[Soldier],
             for soldier in soldiers:
                 score, conflicts, _, _ = evaluate_soldier_fitness(
                     soldier, shift.start, shift.end, shift.post, role_id,
-                    history_scores, session_to_use, draft_assignments
+                    history_scores, session, draft_assignments
                 )
                 
                 # Hard constraints
@@ -801,7 +800,7 @@ def solve_shift_assignment_greedy(shifts: List[Shift], soldiers: List[Soldier],
     logger.info(f"Greedy Solver: Found {len(results)} assignments.")
     return results
 
-def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end: datetime, post: Post, role_id: int, history_scores: Dict[int, float], session, draft_assignments: List[dict] = None):
+def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end: datetime, post: Post, role_id: int, history_scores: Dict[int, float], session: ShavtzachiDB, draft_assignments: List[dict] = None):
     """
     Evaluates how fitting a soldier is for a specific shift.
     Considers both database assignments and provided draft assignments.
@@ -830,14 +829,13 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
         score += 100 # Match bonus
         
     # 2. Overlap, Cooldown & Diversity
-    # We look for any assignment for this soldier in a window around the shift
     # Diversity window is 30 days back/forward.
     window_start = shift_start - timedelta(days=30)
     window_end = shift_end + timedelta(days=30)
     
     # Collect assignments from DB
     combined_assignments = []
-    db_assignments = session.query(Assignment).join(Shift).filter(
+    db_assignments = session.session.query(Assignment).join(Shift).filter(
         Assignment.soldier_id == soldier.id,
         Shift.start < window_end,
         Shift.end > window_start
@@ -854,8 +852,8 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
 
     # Add draft assignments (filtering for this soldier and window)
     if draft_assignments:
-        # Pre-fetch posts for draft lookups to avoid N+1
-        post_cache = {p.name: p for p in session.query(Post).all()}
+        # Pre-fetch posts for draft lookups
+        post_cache = {p.name: p for p in session.get_all_posts(include_slots=False)}
         for a in draft_assignments:
             if a.get("soldier_id") == soldier.id:
                 a_start = a["start"] if isinstance(a["start"], datetime) else datetime.fromisoformat(a["start"].replace('Z', ''))
@@ -870,8 +868,8 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
                         "post": post_cache.get(a["post_name"])
                     })
     
-    last_shift_info_obj = None # To track the actual shift for the "last shift" display
-    next_shift_info_obj = None # To track the actual shift for the "next shift" display
+    last_shift_info_obj = None 
+    next_shift_info_obj = None 
     
     for a in combined_assignments:
         other_start = a["start"]
@@ -879,7 +877,6 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
         
         # Exact overlap
         if shift_start < other_end and other_start < shift_end:
-            # Check if it's the SAME shift (maybe we are re-evaluating an existing assignment)
             if a["post_name"] == post.name and other_start == shift_start and a["role_id"] == role_id:
                 continue
             score -= 2000
@@ -930,24 +927,20 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
             score -= 2000
             conflicts.append("unavailable")
             
-    # 4. Fairness (History Score)
+    # 4. Fairness (History Score) - currently commented out in original
     # h_score = history_scores.get(soldier.id, 0.0)
-    # score -= h_score * 5 # Penalize workload
+    # score -= h_score * 5 
     
     # 5. Rest bonus
-    # Past rest
     if last_shift_info_obj:
-        intensity = last_shift_info_obj["post"].intensity_weight
+        intensity = last_shift_info_obj["post"].intensity_weight if last_shift_info_obj["post"] else 1.0
         rest_hours = (shift_start - last_shift_info_obj["end"]).total_seconds() / 3600
-        # More rest = higher score. Each hour of rest adds significant value.
-        score += min(rest_hours, 168) * (5/intensity) # Bonus for rest up to a week
+        score += min(rest_hours, 168) * (5/intensity) 
     else:
-        # No previous shift found in recent history -> Semi-max rest bonus
         score += 168 * 2.5
         
-    # Future rest
     if next_shift_info_obj:
-        intensity = post.intensity_weight # Current shift's intensity
+        intensity = post.intensity_weight 
         rest_hours = (next_shift_info_obj["start"] - shift_end).total_seconds() / 3600
         score += min(rest_hours, 168) * (5/intensity)
     else:

@@ -246,7 +246,7 @@ def test_multiday_shift_recurrence_and_stability(db):
     # Day 1: 2025-01-01 06:00 to 2025-01-02 06:00
     start1 = datetime(2025, 1, 1, 6, 0)
     end1 = datetime(2025, 1, 2, 6, 0)
-    shifts1 = generate_shifts([post], start1, end1)
+    shifts1 = generate_shifts([post], start1, end1, include_overflow=True)
     
     # Day 1 should see Shift A (Starts Jan 1st 06:00)
     assert len(shifts1) == 1
@@ -257,7 +257,7 @@ def test_multiday_shift_recurrence_and_stability(db):
     # Day 2 should ALSO see Shift A (still ongoing)
     start2 = datetime(2025, 1, 2, 6, 0)
     end2 = datetime(2025, 1, 3, 6, 0)
-    shifts2 = generate_shifts([post], start2, end2)
+    shifts2 = generate_shifts([post], start2, end2, include_overflow=True)
     assert len(shifts2) == 1
     assert shifts2[0].start == datetime(2025, 1, 1, 6, 0)
     
@@ -265,7 +265,7 @@ def test_multiday_shift_recurrence_and_stability(db):
     # Day 3 should see Shift B (Starts Jan 3rd 06:00)
     start3 = datetime(2025, 1, 3, 6, 0)
     end3 = datetime(2025, 1, 4, 6, 0)
-    shifts3 = generate_shifts([post], start3, end3)
+    shifts3 = generate_shifts([post], start3, end3, include_overflow=True)
     assert len(shifts3) == 1
     assert shifts3[0].start == datetime(2025, 1, 3, 6, 0)
     assert shifts3[0].end == datetime(2025, 1, 5, 6, 0)
