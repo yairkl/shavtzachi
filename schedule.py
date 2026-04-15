@@ -192,6 +192,15 @@ def _add_skill_constraints(ctx: _SolverContext):
             if q_count == 0:
                 logger.warning(f"CRITICAL: No one qualified for {shift.post_name} role {rid} ({req})")
 
+def _add_exclusion_constraints(ctx: _SolverContext):
+    """Prevent soldiers from being assigned to posts they are excluded from."""
+    for sid, shift in ctx.shift_map.items():
+        for soldier in ctx.soldiers:
+            excluded_post_names = {p.name for p in soldier.excluded_posts}
+            if shift.post_name in excluded_post_names:
+                for rid in range(ctx.role_count[sid]):
+                    ctx.model.Add(ctx.assignment_vars[(sid, soldier.id, rid)] == 0)
+
 # ---------------------------------------------------------------------------
 # Solver — step 3: handle existing / pre-assigned shifts
 # ---------------------------------------------------------------------------
@@ -660,6 +669,8 @@ def solve_shift_assignment(shifts: List[Shift], soldiers: List[Soldier],
     # --- Add constraints ---
     _add_skill_constraints(ctx)
 
+    _add_exclusion_constraints(ctx)
+
     boundary_assignments = _process_existing_assignments(ctx, existing_assignments)
 
     _add_temporal_constraints(ctx, boundary_assignments)
@@ -843,6 +854,12 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
         conflicts.append("skill_mismatch")
     else:
         score += 100 # Match bonus
+        
+    # 1.5. Post exclusion
+    excluded_posts = {p.name for p in soldier.excluded_posts}
+    if post.name in excluded_posts:
+        score -= 2000
+        conflicts.append("excluded_post")
         
     # 2. Overlap, Cooldown & Diversity
     # Diversity window is 30 days back/forward.

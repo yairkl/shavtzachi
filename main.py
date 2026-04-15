@@ -41,6 +41,7 @@ class SoldierCreate(BaseModel):
     name: str
     skills: List[str]
     division: Optional[int] = None
+    excluded_posts: List[str] = []
 
 class PostCreate(BaseModel):
     name: str
@@ -113,15 +114,22 @@ def get_all_skills(db: ShavtzachiDB = Depends(get_db)):
 def get_soldiers(db: ShavtzachiDB = Depends(get_db)):
     soldiers = db.get_all_soldiers()
     scores = db.get_history_scores()
-    return [{"id": s.id, "name": s.name, "history_score": scores.get(s.id, 0.0), "skills": [sk.name for sk in s.skills], "division": s.division} for s in soldiers]
+    return [{
+        "id": s.id, 
+        "name": s.name, 
+        "history_score": scores.get(s.id, 0.0), 
+        "skills": [sk.name for sk in s.skills], 
+        "division": s.division,
+        "excluded_posts": [p.name for p in s.excluded_posts]
+    } for s in soldiers]
 
 @app.post("/soldiers")
 def create_soldier(s_data: SoldierCreate, db: ShavtzachiDB = Depends(get_db)):
-    return db.create_soldier(s_data.name, s_data.skills, s_data.division)
+    return db.create_soldier(s_data.name, s_data.skills, s_data.division, s_data.excluded_posts)
 
 @app.put("/soldiers/{s_id}")
 def update_soldier(s_id: int, s_data: SoldierCreate, db: ShavtzachiDB = Depends(get_db)):
-    success = db.update_soldier(s_id, s_data.name, s_data.skills, s_data.division)
+    success = db.update_soldier(s_id, s_data.name, s_data.skills, s_data.division, s_data.excluded_posts)
     if not success: raise HTTPException(status_code=404, detail="Soldier not found")
     return {"status": "success"}
 
@@ -195,9 +203,15 @@ def export_soldiers(db: ShavtzachiDB = Depends(get_db)):
     output = io.StringIO()
     writer = csv.writer(output)
     scores = db.get_history_scores()
-    writer.writerow(["name", "division", "skills", "history_score"])
+    writer.writerow(["name", "division", "skills", "history_score", "excluded_posts"])
     for s in db.get_all_soldiers():
-        writer.writerow([s.name, s.division, ",".join([sk.name for sk in s.skills]), scores.get(s.id, 0.0)])
+        writer.writerow([
+            s.name, 
+            s.division, 
+            ",".join([sk.name for sk in s.skills]), 
+            scores.get(s.id, 0.0),
+            ",".join([p.name for p in s.excluded_posts])
+        ])
     output.seek(0)
     return StreamingResponse(output, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=soldiers.csv"})
 
@@ -216,6 +230,14 @@ async def import_soldiers(file: UploadFile = File(...), db: ShavtzachiDB = Depen
             if not sk_name.strip(): continue
             skill = db.get_or_create_skill(sk_name.strip())
             soldier.skills.append(skill)
+            
+        soldier.excluded_posts = []
+        if "excluded_posts" in row:
+            for p_name in row["excluded_posts"].split(","):
+                if not p_name.strip(): continue
+                post = db.get_post_by_name(p_name.strip())
+                if post:
+                    soldier.excluded_posts.append(post)
     db.commit()
     return {"status": "success"}
 

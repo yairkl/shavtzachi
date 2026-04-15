@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { getSoldiers, createSoldier, updateSoldier, deleteSoldier, exportSoldiers, importSoldiers, getSkills } from '@/services/api';
+import { getSoldiers, createSoldier, updateSoldier, deleteSoldier, exportSoldiers, importSoldiers, getSkills, getPosts } from '@/services/api';
 import {
   Table,
   TableBody,
@@ -11,7 +11,7 @@ import {
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Search, RefreshCw, UserPlus, Pencil, Trash2, Download, Upload } from "lucide-react";
+import { Search, RefreshCw, UserPlus, Pencil, Trash2, Download, Upload, ChevronDown, ChevronUp } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
@@ -27,22 +27,26 @@ import { Label } from "@/components/ui/label";
 export default function Soldiers() {
   const [soldiers, setSoldiers] = useState([]);
   const [availableSkills, setAvailableSkills] = useState([]);
+  const [availablePosts, setAvailablePosts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingSoldier, setEditingSoldier] = useState(null);
-  const [formData, setFormData] = useState({ name: "", skills: [], division: "" });
+  const [formData, setFormData] = useState({ name: "", skills: [], division: "", excluded_posts: [] });
+  const [isExclusionsOpen, setIsExclusionsOpen] = useState(false);
   const fileInputRef = useRef(null);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [{ data: soldiersData }, { data: skillsData }] = await Promise.all([
+      const [{ data: soldiersData }, { data: skillsData }, { data: postsData }] = await Promise.all([
         getSoldiers(),
-        getSkills()
+        getSkills(),
+        getPosts()
       ]);
       setSoldiers(soldiersData);
       setAvailableSkills(skillsData);
+      setAvailablePosts(postsData);
     } catch (error) {
       console.error("Error fetching data:", error);
     } finally {
@@ -84,13 +88,15 @@ export default function Soldiers() {
 
   const handleOpenAdd = () => {
     setEditingSoldier(null);
-    setFormData({ name: "", skills: [], division: "" });
+    setFormData({ name: "", skills: [], division: "", excluded_posts: [] });
+    setIsExclusionsOpen(false);
     setIsDialogOpen(true);
   };
 
   const handleOpenEdit = (s) => {
     setEditingSoldier(s);
-    setFormData({ name: s.name, skills: s.skills, division: s.division || "" });
+    setFormData({ name: s.name, skills: s.skills, division: s.division || "", excluded_posts: s.excluded_posts || [] });
+    setIsExclusionsOpen(false);
     setIsDialogOpen(true);
   };
 
@@ -167,6 +173,9 @@ export default function Soldiers() {
                       {soldier.skills.map(skill => (
                         <Badge key={skill} variant="outline" className="text-[9px] uppercase font-bold py-0">{skill}</Badge>
                       ))}
+                      {soldier.excluded_posts?.map(post => (
+                        <Badge key={post} variant="destructive" className="text-[9px] uppercase font-bold py-0">NO {post}</Badge>
+                      ))}
                     </div>
                   </TableCell>
                   <TableCell className="text-right font-mono font-bold text-xs">{soldier.history_score.toFixed(1)}</TableCell>
@@ -196,7 +205,6 @@ export default function Soldiers() {
                     <Input id="division" type="number" value={formData.division} onChange={e => setFormData(prev => ({ ...prev, division: e.target.value }))} className="bg-background/50 border-border" />
                 </div>
                 <div className="space-y-2">
-                    <Label className="text-sm font-bold uppercase tracking-widest opacity-50">Qualifications</Label>
                     <div className="grid grid-cols-2 gap-3 mt-2">
                         {availableSkills.map(skill => (
                             <div key={skill} className="flex items-center space-x-2 bg-muted/20 p-2 rounded-lg border border-border/50 hover:bg-muted/40 transition-colors">
@@ -205,6 +213,30 @@ export default function Soldiers() {
                             </div>
                         ))}
                     </div>
+                </div>
+                <div className="space-y-2 border-t border-border pt-4">
+                    <button 
+                        type="button"
+                        onClick={() => setIsExclusionsOpen(!isExclusionsOpen)}
+                        className="flex items-center justify-between w-full text-sm font-bold uppercase tracking-widest opacity-70 hover:opacity-100 transition-opacity text-red-400"
+                    >
+                        <span>Restricted Posts {formData.excluded_posts.length > 0 && `(${formData.excluded_posts.length})`}</span>
+                        {isExclusionsOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    </button>
+                    
+                    {isExclusionsOpen && (
+                        <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
+                            <p className="text-[10px] text-muted-foreground">Select posts this soldier cannot perform.</p>
+                            <div className="grid grid-cols-2 gap-3 mt-2">
+                                {availablePosts.map(post => (
+                                    <div key={post.name} className="flex items-center space-x-2 bg-red-500/5 p-2 rounded-lg border border-red-500/20 hover:bg-red-500/10 transition-colors">
+                                        <Checkbox id={`post-${post.name}`} checked={formData.excluded_posts.includes(post.name)} onCheckedChange={() => setFormData(prev => ({ ...prev, excluded_posts: prev.excluded_posts.includes(post.name) ? prev.excluded_posts.filter(p => p !== post.name) : [...prev.excluded_posts, post.name] }))} />
+                                        <Label htmlFor={`post-${post.name}`} className="text-xs font-medium capitalize cursor-pointer">{post.name}</Label>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
             <DialogFooter className="gap-2">

@@ -17,6 +17,19 @@ def get_soldier_skill_table(metadata):
 
 soldier_skill_table = get_soldier_skill_table(Base.metadata)
 
+def get_soldier_excluded_post_table(metadata):
+    if 'soldier_excluded_post' in metadata.tables:
+        return metadata.tables['soldier_excluded_post']
+    return Table(
+        'soldier_excluded_post',
+        metadata,
+        Column('soldier_id', Integer, ForeignKey('soldier.id'), primary_key=True),
+        Column('post_name', Text, ForeignKey('post.name'), primary_key=True),
+        extend_existing=True
+    )
+
+soldier_excluded_post_table = get_soldier_excluded_post_table(Base.metadata)
+
 class Skill(Base):
     __tablename__ = 'skill'
     __table_args__ = {'extend_existing': True}
@@ -32,6 +45,7 @@ class Soldier(Base):
     age = Column(Integer, nullable=True)
     division = Column(Integer, ForeignKey('division.id'), nullable=True)
     skills = relationship('Skill', secondary=soldier_skill_table, back_populates='soldiers')
+    excluded_posts = relationship('Post', secondary=soldier_excluded_post_table)
     unavailabilities = relationship('Unavailability', back_populates='soldier')
 
 class Unavailability(Base):

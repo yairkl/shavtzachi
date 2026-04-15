@@ -57,12 +57,14 @@ class ShavtzachiDB:
         return skill
 
     # --- Soldiers ---
-    def get_all_soldiers(self, include_skills=True, include_unavailabilities=False) -> List[Soldier]:
+    def get_all_soldiers(self, include_skills=True, include_unavailabilities=False, include_excluded_posts=True) -> List[Soldier]:
         query = self.session.query(Soldier)
         if include_skills:
             query = query.options(joinedload(Soldier.skills))
         if include_unavailabilities:
             query = query.options(joinedload(Soldier.unavailabilities))
+        if include_excluded_posts:
+            query = query.options(joinedload(Soldier.excluded_posts))
         return query.all()
 
     def get_soldier_by_id(self, soldier_id: int) -> Optional[Soldier]:
@@ -71,17 +73,23 @@ class ShavtzachiDB:
     def get_soldier_by_name(self, name: str) -> Optional[Soldier]:
         return self.session.query(Soldier).filter(Soldier.name == name).first()
 
-    def create_soldier(self, name: str, skill_names: List[str], division: Optional[int] = None) -> Soldier:
+    def create_soldier(self, name: str, skill_names: List[str], division: Optional[int] = None, excluded_post_names: List[str] = []) -> Soldier:
         soldier = Soldier(name=name, division=division)
         for sk_name in skill_names:
             skill = self.get_or_create_skill(sk_name)
             soldier.skills.append(skill)
+        
+        for p_name in excluded_post_names:
+            post = self.get_post_by_name(p_name)
+            if post:
+                soldier.excluded_posts.append(post)
+                
         self.session.add(soldier)
         self.session.commit()
         self.session.refresh(soldier)
         return soldier
 
-    def update_soldier(self, soldier_id: int, name: str, skill_names: List[str], division: Optional[int] = None) -> bool:
+    def update_soldier(self, soldier_id: int, name: str, skill_names: List[str], division: Optional[int] = None, excluded_post_names: List[str] = []) -> bool:
         soldier = self.get_soldier_by_id(soldier_id)
         if not soldier:
             return False
@@ -91,6 +99,13 @@ class ShavtzachiDB:
         for sk_name in skill_names:
             skill = self.get_or_create_skill(sk_name)
             soldier.skills.append(skill)
+        
+        soldier.excluded_posts = []
+        for p_name in excluded_post_names:
+            post = self.get_post_by_name(p_name)
+            if post:
+                soldier.excluded_posts.append(post)
+                
         self.session.commit()
         return True
 
