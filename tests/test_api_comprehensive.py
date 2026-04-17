@@ -228,6 +228,48 @@ class TestScheduler:
         assert len(data) == 1
         assert data[0]["soldier_name"] == "Scheduler Soldier"
 
+    def test_export_schedule(self, client, db, setup_data):
+        # 1. Setup an assignment
+        sol, post = setup_data
+        start = "2025-01-01T08:00:00"
+        end = "2025-01-01T12:00:00"
+        
+        payload = {
+            "start_date": "2025-01-01T00:00:00",
+            "end_date": "2025-01-02T00:00:00",
+            "assignments": [
+                {
+                    "soldier_id": sol.id,
+                    "post_name": "Scheduler Post",
+                    "start": start,
+                    "end": end,
+                    "role_id": 0
+                }
+            ]
+        }
+        client.post("/schedule/save", json=payload)
+        
+        # 2. Export
+        response = client.get(f"/schedule/export?start_date=2025-01-01T00:00:00&end_date=2025-01-02T00:00:00")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        assert "attachment" in response.headers["content-disposition"]
+        assert "xlsx" in response.headers["content-disposition"]
+        
+        # 3. Verify excel structure basics
+        from openpyxl import load_workbook
+        wb = load_workbook(io.BytesIO(response.content))
+        ws = wb.active
+        assert "Daily Schedule" in ws.title or ws.title == "Daily Schedule"
+        # At least one cell should have "Time"
+        found_time = False
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.value == "Time":
+                    found_time = True
+                    break
+        assert found_time
+
 class TestUnavailabilities:
     def test_unavailabilities_crud(self, client, db):
         # 1. Setup soldier

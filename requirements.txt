@@ -3,3 +3,4 @@ numpy
 sqlalchemy
 fastapi
 ortools
+openpyxl

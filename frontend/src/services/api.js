@@ -43,6 +43,9 @@ export const draftSchedule = (startDate, endDate, algorithm = "optimal") =>
 export const saveSchedule = (startDate, endDate, assignments) => 
   apiClient.post('/schedule/save', { start_date: startDate, end_date: endDate, assignments });
 
+export const exportSchedule = (startDate, endDate) => 
+  apiClient.get('/schedule/export', { params: { start_date: startDate, end_date: endDate }, responseType: 'blob' });
+
 // CSV API
 export const exportSoldiers = () => apiClient.get('/soldiers/export', { responseType: 'blob' });
 export const importSoldiers = (file) => {

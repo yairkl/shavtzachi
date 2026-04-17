@@ -200,7 +200,7 @@ class ShavtzachiDB:
             Shift.end > start
         ).options(
             joinedload(Assignment.soldier),
-            joinedload(Assignment.shift).joinedload(Shift.post)
+            joinedload(Assignment.shift).joinedload(Shift.post).joinedload(Post.slots).joinedload(PostTemplateSlot.skill)
         ).all()
 
     def get_assignments_for_cooldown_lookback(self, lookback_date: datetime, end_date: datetime) -> List[Assignment]:

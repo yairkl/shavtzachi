@@ -13,6 +13,7 @@ import csv
 import io
 import logging
 from collections import defaultdict
+from export_utils import export_schedule_to_excel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -380,6 +381,47 @@ def get_schedule(start_date: datetime, end_date: datetime, db: ShavtzachiDB = De
         } for a in assignments]
     except Exception as e:
         logger.error(f"Get schedule error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/schedule/export")
+def export_schedule(start_date: datetime, end_date: datetime, db: ShavtzachiDB = Depends(get_db)):
+    try:
+        start_naive = start_date.replace(tzinfo=None)
+        end_naive = end_date.replace(tzinfo=None)
+        
+        assignments = db.get_assignments_in_range(start_naive, end_naive)
+        
+        data = []
+        for a in assignments:
+            # Find the skill name for this role_id in the post templates
+            skill_name = "N/A"
+            for slot in a.shift.post.slots:
+                if slot.role_index == a.role_id:
+                    skill_name = slot.skill.name
+                    break
+            
+            data.append({
+                "soldier_id": a.soldier_id,
+                "soldier_name": a.soldier.name,
+                "division_id": a.soldier.division,
+                "post_name": a.shift.post.name,
+                "start": a.shift.start,
+                "end": a.shift.end,
+                "role_id": a.role_id,
+                "role_name": skill_name
+            })
+        
+        excel_file = export_schedule_to_excel(data, start_naive, end_naive)
+        
+        filename = f"schedule_{start_naive.strftime('%Y%m%d')}.xlsx"
+        return StreamingResponse(
+            excel_file,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        logger.error(f"Export schedule error: {e}")
+        import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/schedule/draft")
