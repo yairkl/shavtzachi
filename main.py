@@ -1,6 +1,12 @@
-from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+import os
+import sys
+import webbrowser
+import threading
+import time
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from database import engine, Session as DBSession, ShavtzachiDB
@@ -19,6 +25,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Shavtzachi API")
+api_router = APIRouter(prefix="/api")
 
 app.add_middleware(
     CORSMiddleware,
@@ -106,12 +113,12 @@ class CandidateRequest(BaseModel):
 
 # --- Endpoints: Personnel ---
 
-@app.get("/skills")
+@api_router.get("/skills")
 def get_all_skills(db: ShavtzachiDB = Depends(get_db)):
     skills = db.get_all_skills()
     return [s.name for s in skills]
 
-@app.get("/soldiers")
+@api_router.get("/soldiers")
 def get_soldiers(db: ShavtzachiDB = Depends(get_db)):
     soldiers = db.get_all_soldiers()
     scores = db.get_history_scores()
@@ -124,17 +131,17 @@ def get_soldiers(db: ShavtzachiDB = Depends(get_db)):
         "excluded_posts": [p.name for p in s.excluded_posts]
     } for s in soldiers]
 
-@app.post("/soldiers")
+@api_router.post("/soldiers")
 def create_soldier(s_data: SoldierCreate, db: ShavtzachiDB = Depends(get_db)):
     return db.create_soldier(s_data.name, s_data.skills, s_data.division, s_data.excluded_posts)
 
-@app.put("/soldiers/{s_id}")
+@api_router.put("/soldiers/{s_id}")
 def update_soldier(s_id: int, s_data: SoldierCreate, db: ShavtzachiDB = Depends(get_db)):
     success = db.update_soldier(s_id, s_data.name, s_data.skills, s_data.division, s_data.excluded_posts)
     if not success: raise HTTPException(status_code=404, detail="Soldier not found")
     return {"status": "success"}
 
-@app.delete("/soldiers/{s_id}")
+@api_router.delete("/soldiers/{s_id}")
 def delete_soldier(s_id: int, db: ShavtzachiDB = Depends(get_db)):
     success = db.delete_soldier(s_id)
     if not success: raise HTTPException(status_code=404, detail="Soldier not found")
@@ -142,7 +149,7 @@ def delete_soldier(s_id: int, db: ShavtzachiDB = Depends(get_db)):
 
 # --- Endpoints: Posts ---
 
-@app.get("/posts")
+@api_router.get("/posts")
 def get_posts(db: ShavtzachiDB = Depends(get_db)):
     posts = db.get_all_posts()
     return [{
@@ -158,7 +165,7 @@ def get_posts(db: ShavtzachiDB = Depends(get_db)):
         "slots": [{"role_index": s.role_index, "skill": s.skill.name} for s in p.slots]
     } for p in posts]
 
-@app.post("/posts")
+@api_router.post("/posts")
 def create_post(p_data: PostCreate, db: ShavtzachiDB = Depends(get_db)):
     db.create_post(
         p_data.name,
@@ -174,7 +181,7 @@ def create_post(p_data: PostCreate, db: ShavtzachiDB = Depends(get_db)):
     )
     return {"status": "success"}
 
-@app.put("/posts/{name}")
+@api_router.put("/posts/{name}")
 def update_post(name: str, p_data: PostCreate, db: ShavtzachiDB = Depends(get_db)):
     success = db.update_post(
         name,
@@ -191,7 +198,7 @@ def update_post(name: str, p_data: PostCreate, db: ShavtzachiDB = Depends(get_db
     if not success: raise HTTPException(status_code=404, detail="Post not found")
     return {"status": "success"}
 
-@app.delete("/posts/{name}")
+@api_router.delete("/posts/{name}")
 def delete_post(name: str, db: ShavtzachiDB = Depends(get_db)):
     success = db.delete_post(name)
     if not success: raise HTTPException(status_code=404, detail="Post not found")
@@ -199,7 +206,7 @@ def delete_post(name: str, db: ShavtzachiDB = Depends(get_db)):
 
 # --- CSV Endpoints ---
 
-@app.get("/soldiers/export")
+@api_router.get("/soldiers/export")
 def export_soldiers(db: ShavtzachiDB = Depends(get_db)):
     output = io.StringIO()
     writer = csv.writer(output)
@@ -216,7 +223,7 @@ def export_soldiers(db: ShavtzachiDB = Depends(get_db)):
     output.seek(0)
     return StreamingResponse(output, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=soldiers.csv"})
 
-@app.post("/soldiers/import")
+@api_router.post("/soldiers/import")
 async def import_soldiers(file: UploadFile = File(...), db: ShavtzachiDB = Depends(get_db)):
     content = await file.read()
     reader = csv.DictReader(io.StringIO(content.decode("utf-8")))
@@ -242,7 +249,7 @@ async def import_soldiers(file: UploadFile = File(...), db: ShavtzachiDB = Depen
     db.commit()
     return {"status": "success"}
 
-@app.get("/posts/export")
+@api_router.get("/posts/export")
 def export_posts(db: ShavtzachiDB = Depends(get_db)):
     output = io.StringIO()
     writer = csv.writer(output)
@@ -263,7 +270,7 @@ def export_posts(db: ShavtzachiDB = Depends(get_db)):
     output.seek(0)
     return StreamingResponse(output, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=posts.csv"})
 
-@app.post("/posts/import")
+@api_router.post("/posts/import")
 async def import_posts(file: UploadFile = File(...), db: ShavtzachiDB = Depends(get_db)):
     content = await file.read()
     reader = csv.DictReader(io.StringIO(content.decode("utf-8")))
@@ -290,7 +297,7 @@ async def import_posts(file: UploadFile = File(...), db: ShavtzachiDB = Depends(
 
 # --- Endpoints: Scheduler ---
 
-@app.get("/schedule/shifts")
+@api_router.get("/schedule/shifts")
 def get_shifts_with_assignments(start_date: datetime, end_date: datetime, db: ShavtzachiDB = Depends(get_db)):
     try:
         start_naive = start_date.replace(tzinfo=None)
@@ -326,7 +333,7 @@ def get_shifts_with_assignments(start_date: datetime, end_date: datetime, db: Sh
         import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/schedule/candidates", response_model=List[CandidateResponse])
+@api_router.post("/schedule/candidates", response_model=List[CandidateResponse])
 def get_candidates(req: CandidateRequest, db: ShavtzachiDB = Depends(get_db)):
     try:
         start_naive = req.start.replace(tzinfo=None)
@@ -363,7 +370,7 @@ def get_candidates(req: CandidateRequest, db: ShavtzachiDB = Depends(get_db)):
         import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/schedule")
+@api_router.get("/schedule")
 def get_schedule(start_date: datetime, end_date: datetime, db: ShavtzachiDB = Depends(get_db)):
     try:
         start_naive = start_date.replace(tzinfo=None)
@@ -383,7 +390,7 @@ def get_schedule(start_date: datetime, end_date: datetime, db: ShavtzachiDB = De
         logger.error(f"Get schedule error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/schedule/export")
+@api_router.get("/schedule/export")
 def export_schedule(start_date: datetime, end_date: datetime, db: ShavtzachiDB = Depends(get_db)):
     try:
         start_naive = start_date.replace(tzinfo=None)
@@ -424,7 +431,7 @@ def export_schedule(start_date: datetime, end_date: datetime, db: ShavtzachiDB =
         import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/schedule/draft")
+@api_router.post("/schedule/draft")
 def draft_schedule(req: DraftRequest, db: ShavtzachiDB = Depends(get_db)):
     try:
         soldiers = db.get_all_soldiers(include_unavailabilities=True)
@@ -467,7 +474,7 @@ def draft_schedule(req: DraftRequest, db: ShavtzachiDB = Depends(get_db)):
         import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/schedule/save")
+@api_router.post("/schedule/save")
 def save_schedule(req: SaveScheduleRequest, db: ShavtzachiDB = Depends(get_db)):
     try:
         start_naive = req.start_date.replace(tzinfo=None)
@@ -510,7 +517,7 @@ def save_schedule(req: SaveScheduleRequest, db: ShavtzachiDB = Depends(get_db)):
 
 # --- Endpoints: Unavailability ---
 
-@app.get("/unavailabilities", response_model=List[UnavailabilityResponse])
+@api_router.get("/unavailabilities", response_model=List[UnavailabilityResponse])
 def get_unavailabilities(
     start_date: Optional[datetime] = None, 
     end_date: Optional[datetime] = None, 
@@ -529,7 +536,7 @@ def get_unavailabilities(
         "reason": r.reason
     } for r in records]
 
-@app.post("/unavailabilities")
+@api_router.post("/unavailabilities")
 def create_unavailability(u_data: UnavailabilityCreate, db: ShavtzachiDB = Depends(get_db)):
     existing = db.check_overlapping_unavailability(
         u_data.soldier_id, 
@@ -547,7 +554,7 @@ def create_unavailability(u_data: UnavailabilityCreate, db: ShavtzachiDB = Depen
     )
     return {"status": "success", "id": record.id}
 
-@app.put("/unavailabilities/{u_id}")
+@api_router.put("/unavailabilities/{u_id}")
 def update_unavailability(u_id: int, u_data: UnavailabilityCreate, db: ShavtzachiDB = Depends(get_db)):
     success = db.update_unavailability(
         u_id,
@@ -559,13 +566,13 @@ def update_unavailability(u_id: int, u_data: UnavailabilityCreate, db: Shavtzach
     if not success: raise HTTPException(status_code=404, detail="Unavailability not found")
     return {"status": "success"}
 
-@app.delete("/unavailabilities/{u_id}")
+@api_router.delete("/unavailabilities/{u_id}")
 def delete_unavailability(u_id: int, db: ShavtzachiDB = Depends(get_db)):
     success = db.delete_unavailability(u_id)
     if not success: raise HTTPException(status_code=404, detail="Unavailability not found")
     return {"status": "success"}
 
-@app.get("/unavailabilities/check-manpower")
+@api_router.get("/unavailabilities/check-manpower")
 def check_manpower(start_date: datetime, end_date: datetime, db: ShavtzachiDB = Depends(get_db)):
     try:
         return db.check_manpower(start_date, end_date)
@@ -577,6 +584,36 @@ def check_manpower(start_date: datetime, end_date: datetime, db: ShavtzachiDB = 
         logger.error(f"Manpower check error: {e}")
         import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+app.include_router(api_router)
+
+# Provide a fallback SPA route and serve static files
+def get_frontend_dist():
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, "frontend", "dist")
+    else:
+        return os.path.join(os.path.dirname(__file__), "frontend", "dist")
+
+frontend_dist = get_frontend_dist()
+
+if os.path.exists(frontend_dist):
+    # Route for SPA fallback
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        file_path = os.path.join(frontend_dist, full_path)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(frontend_dist, "index.html"))
+else:
+    logger.warning(f"Frontend dist directory not found at {frontend_dist}")
+
+def open_browser():
+    time.sleep(1.5)
+    webbrowser.open("http://localhost:8001")
+
+@app.on_event("startup")
+def on_startup():
+    threading.Thread(target=open_browser, daemon=True).start()
 
 if __name__ == "__main__":
     import uvicorn
