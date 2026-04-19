@@ -51,7 +51,7 @@ def main():
         sys.exit(1)
         
     print("\n==================================")
-    print("✅ Build completed successfully!")
+    print("Build completed successfully!")
     executable_ext = ".exe" if os.name == "nt" else ""
     print(f"Your standalone application is located at: dist/shavtzachi{executable_ext}")
     print("You can distribute this single file to non-technical users.")
