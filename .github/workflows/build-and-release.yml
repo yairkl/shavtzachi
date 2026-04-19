@@ -1,0 +1,75 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - master
+      - 'release/*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Run Build Script
+        run: python build.py
+
+      - name: Rename Executables
+        shell: python
+        run: |
+          import os, sys
+          src = "dist/shavtzachi.exe" if sys.platform == "win32" else "dist/shavtzachi"
+          
+          if sys.platform == "win32":
+              dst = "dist/shavtzachi-windows.exe"
+          elif sys.platform == "darwin":
+              dst = "dist/shavtzachi-macos"
+          else:
+              dst = "dist/shavtzachi-linux"
+              
+          os.rename(src, dst)
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: executable-${{ matrix.os }}
+          path: dist/*
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-tmp
+          merge-multiple: true
+
+      - name: Create or Update Latest Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: "latest"
+          name: "Latest Release"
+          artifacts: "dist-tmp/*"
+          allowUpdates: true
+          makeLatest: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+          body: "Automated rolling build of the latest version of Shavtzachi."
