@@ -69,9 +69,21 @@ npm run dev
 
 ---
 
-## 📦 Production Build instructions
+## 📥 Installation for Non-Technical Users (End-Users)
 
-You can compile the entire application (React Web App + FastAPI Backend + Database engine) into a **single, portable, executable file** for non-technical users using `PyInstaller`. No python installations or docker containers will be required for end users.
+If you just want to use the application without dealing with code, you do not need to install Python or Node.js. 
+
+1. **Go to the Releases Page:** Visit the [Releases page](https://github.com/yairkl/shavtzachi/releases) of this repository.
+2. **Download the App:** Download the latest version of the executable file (e.g., `shavtzachi.exe` for Windows).
+3. **Run the App:** Move the downloaded file into a dedicated folder (e.g., `Documents/Shavtzachi`). Double-click the file to open it. 
+   - *Note:* The first time you open it, a black console window will appear and a web browser will automatically open the application.
+4. **Your Data:** A `data.db` file will automatically be created in the same folder as the executable. **Do not delete this file**, as it holds all of your saved schedules and soldier constraints!
+
+---
+
+## 📦 Production Build Instructions (For Developers)
+
+You can compile the entire application (React Web App + FastAPI Backend + Database engine) into a **single, portable, executable file** to distribute to non-technical users via GitHub Releases.
 
 ### Building
 Open a terminal in the root directory (make sure your python virtual environment with `pyinstaller` installed is activated).
