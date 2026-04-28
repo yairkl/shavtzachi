@@ -92,19 +92,19 @@ class ShavtzachiDB:
                 
                 resp = self.client.request(method, url, **kwargs)
                 
-                if resp.status_code == 403:
-                    # Don't retry 403 - it usually means the token is revoked or access is denied.
-                    resp.raise_for_status()
-                    
                 if resp.status_code == 429 or (500 <= resp.status_code < 600):
-                    print(f"Retriable error ({resp.status_code}). Retrying in {delay:.2f} seconds (attempt {i+1}/{retries})...")
+                    print(f"Retriable status error ({resp.status_code}). Retrying in {delay:.2f} seconds (attempt {i+1}/{retries})...")
                     ptime.sleep(delay)
                     delay *= 2
                     delay += random.uniform(0, 1.0)
                     continue
                 
+                # For all other errors (including 403), raise immediately and don't retry
                 resp.raise_for_status()
                 return resp.json()
+            except httpx.HTTPStatusError as err:
+                # Do not retry status errors (except 429/5xx handled above)
+                raise err
             except (httpx.HTTPError, socket.timeout, TimeoutError, ssl.SSLError, socket.gaierror) as err:
                  print(f"Network error ({type(err).__name__}). Retrying in {delay:.2f} seconds (attempt {i+1}/{retries})...")
                  ptime.sleep(delay)

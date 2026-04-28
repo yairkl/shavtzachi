@@ -590,17 +590,22 @@ heartbeat_lock = threading.Lock()
 
 def monitor_heartbeat():
     """Background thread that kills the process if heartbeat is lost."""
-    # Give a long grace period (60s) for startup and first load
+    # Give a long grace period for startup, frontend load, and initial auth
     logger.info("Heartbeat monitor: waiting for initial connection...")
     time.sleep(60)
+    
+    # Reset last_heartbeat after grace period so we start counting from now
+    global last_heartbeat
+    with heartbeat_lock:
+        last_heartbeat = time.time()
     
     while True:
         time.sleep(10)
         with heartbeat_lock:
             elapsed = time.time() - last_heartbeat
         
-        # 30s timeout is more robust for network hiccups or slow machines
-        if elapsed > 30:
+        # 60s timeout is more robust for slow networks or heavy initial GSheets loads
+        if elapsed > 60:
             logger.info(f"Heartbeat lost ({elapsed:.1f}s). Shutting down.")
             # Use os._exit to kill the whole process group including uvicorn
             os._exit(0)
