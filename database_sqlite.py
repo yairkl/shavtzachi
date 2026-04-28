@@ -481,8 +481,6 @@ class ShavtzachiDB:
             current_date += timedelta(days=1)
         return results
 
-engine = None
-Session = lambda: None
 
 def init_db(eng):
     global engine, Session

@@ -16,7 +16,26 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-CONFIG_FILE = 'config.json'
+import sys
+
+def get_base_path():
+    """Get the directory where the executable or main script is located."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.abspath(".")
+
+def get_resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller."""
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+
+CONFIG_FILE = os.path.join(get_base_path(), 'config.json')
+TOKEN_FILE = os.path.join(get_base_path(), 'token.json')
+DB_FILE = os.path.join(get_base_path(), 'data.db')
+CREDENTIALS_FILE = get_resource_path('credentials.json')
+# If an external credentials.json exists next to the exe, it can override the bundled one
+EXTERNAL_CREDENTIALS_FILE = os.path.join(get_base_path(), 'credentials.json')
 
 
 def _load_config():
@@ -53,7 +72,7 @@ def _create_db_instance():
 
 def _get_sqlite_engine():
     from sqlalchemy import create_engine
-    return create_engine('sqlite:///data.db', connect_args={"check_same_thread": False})
+    return create_engine(f'sqlite:///{DB_FILE}', connect_args={"check_same_thread": False})
 
 
 # Re-export models and Base for backward compatibility

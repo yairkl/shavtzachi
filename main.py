@@ -8,7 +8,10 @@ import sys
 import webbrowser
 import threading
 import time
-from database import ShavtzachiDB, get_db_instance, reset_db_instance, _load_config, _is_gsheets_configured
+from database import (
+    ShavtzachiDB, get_db_instance, reset_db_instance, _load_config, _is_gsheets_configured,
+    TOKEN_FILE, CREDENTIALS_FILE, EXTERNAL_CREDENTIALS_FILE, get_base_path
+)
 from models import Soldier, Post, Shift, Assignment, Skill, PostTemplateSlot, Unavailability
 from schedule import generate_shifts, solve_shift_assignment, solve_shift_assignment_greedy
 from pydantic import BaseModel, field_validator
@@ -27,7 +30,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Pre-load data on startup (only if already authenticated)
     config = _load_config()
-    if _is_gsheets_configured(config) and os.path.exists("token.json"):
+    if _is_gsheets_configured(config) and os.path.exists(TOKEN_FILE):
         try:
             db = get_db_instance()
             db.reload_cache()
@@ -595,7 +598,7 @@ def auth_status():
     if not _is_gsheets_configured(config):
         return {"authenticated": True, "backend": "sqlite"}
 
-    if not os.path.exists("token.json"):
+    if not os.path.exists(TOKEN_FILE):
         return {"authenticated": False, "backend": "gsheets", "reason": "no_token"}
 
     try:
@@ -603,15 +606,16 @@ def auth_status():
         from google.auth.transport.requests import Request
         import json
         
-        creds = Credentials.from_authorized_user_file("token.json", OAUTH_SCOPES)
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, OAUTH_SCOPES)
         
         # Verify client_id matches credentials.json (prevents 403 when switching cred types)
-        if os.path.exists("credentials.json"):
-            with open("credentials.json") as f:
+        active_creds_path = EXTERNAL_CREDENTIALS_FILE if os.path.exists(EXTERNAL_CREDENTIALS_FILE) else CREDENTIALS_FILE
+        if os.path.exists(active_creds_path):
+            with open(active_creds_path) as f:
                 cdata = json.load(f)
                 cid = cdata.get("web", {}).get("client_id") or cdata.get("installed", {}).get("client_id")
                 if cid and creds.client_id != cid:
-                    os.remove("token.json")
+                    os.remove(TOKEN_FILE)
                     return {"authenticated": False, "backend": "gsheets", "reason": "credential_mismatch"}
 
         if creds.valid:
@@ -619,12 +623,12 @@ def auth_status():
         if creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
-                with open("token.json", "w") as f:
+                with open(TOKEN_FILE, "w") as f:
                     f.write(creds.to_json())
                 return {"authenticated": True, "backend": "gsheets"}
             except Exception as e:
                 logger.warning(f"Token refresh failed: {e}")
-                os.remove("token.json")
+                os.remove(TOKEN_FILE)
     except Exception as e:
         logger.error(f"Auth status check error: {e}")
         pass
@@ -639,19 +643,20 @@ def auth_login():
     if not _is_gsheets_configured(config):
         raise HTTPException(status_code=400, detail="App is using SQLite backend — no login required.")
 
-    if not os.path.exists("credentials.json"):
+    active_creds_path = EXTERNAL_CREDENTIALS_FILE if os.path.exists(EXTERNAL_CREDENTIALS_FILE) else CREDENTIALS_FILE
+    if not os.path.exists(active_creds_path):
         raise HTTPException(status_code=500, detail="credentials.json not found on server.")
 
     try:
         from google_auth_oauthlib.flow import Flow
         import json
-        with open("credentials.json") as f:
+        with open(active_creds_path) as f:
             client_config = json.load(f)
 
         # Support both 'web' and 'installed' credential types
         cred_type = "web" if "web" in client_config else "installed"
         flow = Flow.from_client_secrets_file(
-            "credentials.json",
+            active_creds_path,
             scopes=OAUTH_SCOPES,
             redirect_uri=OAUTH_REDIRECT_URI,
         )
@@ -663,8 +668,9 @@ def auth_login():
         
         # PERSIST PKCE VERIFIER: The flow generates a code_verifier for PKCE.
         # Since we are stateless across requests, we must save it to use in the callback.
+        code_verifier_path = os.path.join(get_base_path(), ".code_verifier")
         if hasattr(flow, 'code_verifier'):
-            with open(".code_verifier", "w") as f:
+            with open(code_verifier_path, "w") as f:
                 f.write(flow.code_verifier)
                 
         return RedirectResponse(url=auth_url)
@@ -679,26 +685,28 @@ def auth_callback(code: str, state: Optional[str] = None, error: Optional[str] =
     if error:
         return RedirectResponse(url=f"/?auth_error={error}")
 
-    if not os.path.exists("credentials.json"):
+    active_creds_path = EXTERNAL_CREDENTIALS_FILE if os.path.exists(EXTERNAL_CREDENTIALS_FILE) else CREDENTIALS_FILE
+    if not os.path.exists(active_creds_path):
         raise HTTPException(status_code=500, detail="credentials.json not found on server.")
 
     try:
         from google_auth_oauthlib.flow import Flow
         flow = Flow.from_client_secrets_file(
-            "credentials.json",
+            active_creds_path,
             scopes=OAUTH_SCOPES,
             redirect_uri=OAUTH_REDIRECT_URI,
         )
         
         # RESTORE PKCE VERIFIER:
-        if os.path.exists(".code_verifier"):
-            with open(".code_verifier", "r") as f:
+        code_verifier_path = os.path.join(get_base_path(), ".code_verifier")
+        if os.path.exists(code_verifier_path):
+            with open(code_verifier_path, "r") as f:
                 flow.code_verifier = f.read().strip()
-            os.remove(".code_verifier") # Clean up
+            os.remove(code_verifier_path) # Clean up
             
         flow.fetch_token(code=code)
         creds = flow.credentials
-        with open("token.json", "w") as f:
+        with open(TOKEN_FILE, "w") as f:
             f.write(creds.to_json())
         logger.info("OAuth callback: token saved successfully.")
 

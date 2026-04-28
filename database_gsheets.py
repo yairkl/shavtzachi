@@ -20,18 +20,11 @@ import ssl
 
 from models import Soldier, Skill, Post, PostTemplateSlot, Shift, Assignment, Unavailability
 from schedule_gsheets import build_schedule_requests, parse_grid
+from database import CONFIG_FILE, TOKEN_FILE
 
 import sys
 
-CONFIG_FILE = 'config.json'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-
-def get_resource_path(relative_path):
-    if getattr(sys, 'frozen', False):
-        base_path = sys._MEIPASS
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_path, relative_path)
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -347,12 +340,12 @@ class ShavtzachiDB:
         self.reload_cache(force=True)
 
     def authenticate(self):
-        if os.path.exists('token.json'):
+        if os.path.exists(TOKEN_FILE):
             try:
-                self.creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+                self.creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
                 if self.creds and self.creds.expired and self.creds.refresh_token:
                     self.creds.refresh(GoogleRequest())
-                    with open('token.json', 'w') as token:
+                    with open(TOKEN_FILE, 'w') as token:
                         token.write(self.creds.to_json())
             except Exception as e:
                 logger.error(f"Error during token load/refresh: {e}")
