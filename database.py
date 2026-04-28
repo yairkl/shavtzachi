@@ -41,27 +41,37 @@ EXTERNAL_CREDENTIALS_FILE = os.path.join(get_base_path(), 'credentials.json')
 def load_config():
     """Load config.json from external file or bundled resource."""
     # Try external first (next to the executable)
+    logger.info(f"Checking for external config at: {CONFIG_FILE}")
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r') as f:
-                return json.load(f)
-        except Exception:
-            pass
+                config = json.load(f)
+                logger.info(f"Loaded config from external file: {CONFIG_FILE}")
+                return config
+        except Exception as e:
+            logger.warning(f"Failed to load external config: {e}")
     
     # Try bundled second (inside the executable)
     bundled_config = get_resource_path('config.json')
+    logger.info(f"Checking for bundled config at: {bundled_config}")
     if os.path.exists(bundled_config):
         try:
             with open(bundled_config, 'r') as f:
-                return json.load(f)
-        except Exception:
-            pass
+                config = json.load(f)
+                logger.info(f"Loaded config from bundled resource: {bundled_config}")
+                return config
+        except Exception as e:
+            logger.warning(f"Failed to load bundled config: {e}")
             
+    logger.info("No valid config.json found (external or bundled). Using defaults.")
     return {}
 
 
 def _is_gsheets_configured(config: dict) -> bool:
-    return bool(config.get("INPUT_SPREADSHEET_ID"))
+    is_cfg = bool(config.get("INPUT_SPREADSHEET_ID"))
+    if not is_cfg and config:
+        logger.debug(f"Config found but INPUT_SPREADSHEET_ID is missing. Keys: {list(config.keys())}")
+    return is_cfg
 
 
 def _create_db_instance():
