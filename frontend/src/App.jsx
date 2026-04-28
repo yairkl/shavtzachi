@@ -43,7 +43,7 @@ function App() {
   const authError = urlParams.get('auth_error');
 
   if (!authStatus.authenticated) {
-    return <Login authError={authError} />;
+    return <Login authStatus={authStatus} authError={authError} />;
   }
 
   return (

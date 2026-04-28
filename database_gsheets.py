@@ -103,8 +103,15 @@ class ShavtzachiDB:
                 resp.raise_for_status()
                 return resp.json()
             except httpx.HTTPStatusError as err:
-                # Do not retry status errors (except 429/5xx handled above)
-                raise err
+                # Try to extract more detail from the response body
+                try:
+                    detail = err.response.json()
+                    error_msg = detail.get("error", {}).get("message", str(err))
+                    print(f"Google Sheets API Error ({err.response.status_code}): {error_msg}")
+                    # Raise a new exception with the better message
+                    raise Exception(f"Google Sheets API Error: {error_msg}") from err
+                except:
+                    raise err
             except (httpx.HTTPError, socket.timeout, TimeoutError, ssl.SSLError, socket.gaierror) as err:
                  print(f"Network error ({type(err).__name__}). Retrying in {delay:.2f} seconds (attempt {i+1}/{retries})...")
                  ptime.sleep(delay)

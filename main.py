@@ -656,7 +656,25 @@ def auth_status():
                     return {"authenticated": False, "backend": "gsheets", "reason": "credential_mismatch"}
 
         if creds.valid:
-            return {"authenticated": True, "backend": "gsheets"}
+            # Check if we can actually access the spreadsheet
+            db_id = None
+            try:
+                db = get_db_instance()
+                db_id = db.input_sheet_id
+                if db_id:
+                    # Lightweight check
+                    db._gsheets_get_metadata(db_id, fields='spreadsheetId')
+                return {"authenticated": True, "backend": "gsheets"}
+            except Exception as e:
+                logger.warning(f"Authenticated but spreadsheet access failed: {e}")
+                return {
+                    "authenticated": False,
+                    "backend": "gsheets",
+                    "reason": "permission_denied",
+                    "detail": str(e),
+                    "sheet_id": db_id
+                }
+
         if creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())

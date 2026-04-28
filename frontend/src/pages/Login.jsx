@@ -1,7 +1,11 @@
 import React, { useEffect, useState } from 'react';
 
-export default function Login({ authError }) {
+export default function Login({ authStatus, authError }) {
   const [loading, setLoading] = useState(false);
+
+  const isPermissionDenied = authStatus?.reason === 'permission_denied';
+  const sheetId = authStatus?.sheet_id;
+  const sheetUrl = sheetId ? `https://docs.google.com/spreadsheets/d/${sheetId}` : null;
 
   const handleLogin = () => {
     setLoading(true);
@@ -63,10 +67,35 @@ export default function Login({ authError }) {
         </div>
 
         {/* Error */}
-        {authError && (
-          <div className="w-full px-4 py-3 rounded-lg text-sm text-center"
-               style={{ background: 'hsla(0,63%,31%,0.3)', border: '1px solid hsla(0,63%,50%,0.4)', color: 'hsl(0,80%,75%)' }}>
-            {decodeURIComponent(authError).replace(/\+/g, ' ')}
+        {(authError || isPermissionDenied) && (
+          <div className="w-full flex flex-col gap-3">
+            <div className="w-full px-4 py-3 rounded-lg text-sm text-center"
+                 style={{ 
+                   background: isPermissionDenied ? 'hsla(35,100%,50%,0.15)' : 'hsla(0,63%,31%,0.3)', 
+                   border: isPermissionDenied ? '1px solid hsla(35,100%,50%,0.4)' : '1px solid hsla(0,63%,50%,0.4)', 
+                   color: isPermissionDenied ? 'hsl(35,100%,75%)' : 'hsl(0,80%,75%)' 
+                 }}>
+              {isPermissionDenied ? (
+                <>
+                  <div className="font-bold mb-1">Access Denied</div>
+                  <div className="opacity-80">You don't have permission to access the spreadsheet.</div>
+                </>
+              ) : (
+                decodeURIComponent(authError).replace(/\+/g, ' ')
+              )}
+            </div>
+
+            {isPermissionDenied && sheetUrl && (
+              <a 
+                href={sheetUrl} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="w-full py-2 rounded-lg text-xs font-medium text-center transition-colors"
+                style={{ background: 'rgba(255,255,255,0.05)', color: 'hsl(215, 20%, 70%)', border: '1px solid rgba(255,255,255,0.1)' }}
+              >
+                Open Spreadsheet to Request Access ↗
+              </a>
+            )}
           </div>
         )}
 
