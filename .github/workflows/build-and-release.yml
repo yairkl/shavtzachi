@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ${{ matrix.os }}
@@ -33,6 +36,18 @@ jobs:
         run: |
           echo '${{ secrets.CREDENTIALS_JSON }}' > credentials.json
           echo '${{ secrets.CONFIG_JSON }}' > config.json
+
+      - name: Run Tests
+        run: |
+          pip install pytest-cov
+          pytest --cov=. --cov-report=xml --cov-report=term-missing
+
+      - name: Upload Coverage Report
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
 
       - name: Run Build Script
         run: python build.py
