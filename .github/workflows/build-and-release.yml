@@ -94,6 +94,12 @@ jobs:
           path: dist-tmp
           merge-multiple: true
 
+      - name: Make Linux and MacOS binaries executable
+        shell: bash
+        run: |
+          if [ -f dist-tmp/shavtzachi-linux ]; then chmod +x dist-tmp/shavtzachi-linux; fi
+          if [ -f dist-tmp/shavtzachi-macos ]; then chmod +x dist-tmp/shavtzachi-macos; fi
+
       - name: Create or Update Latest Release
         uses: ncipollo/release-action@v1
         with:
