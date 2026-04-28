@@ -20,21 +20,12 @@ import ssl
 
 from models import Soldier, Skill, Post, PostTemplateSlot, Shift, Assignment, Unavailability
 from schedule_gsheets import build_schedule_requests, parse_grid
-from database import CONFIG_FILE, TOKEN_FILE
+from database import load_config, CONFIG_FILE, TOKEN_FILE
 
 import sys
 
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
-def load_config():
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, 'r') as f:
-            return json.load(f)
-    return {"INPUT_SPREADSHEET_ID": None, "OUTPUT_SPREADSHEET_ID": None}
-
-def save_config(config):
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f)
 
 
 class ShavtzachiDB:

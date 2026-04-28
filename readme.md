@@ -3,7 +3,7 @@
 Shavtzachi is an automated, constraints-based personnel shift scheduler. Designed to eliminate the manual, error-prone process of assigning individuals to shifts, the system natively handles skills, cooldowns, exclusions, and predictive future rest periods using tailored optimization algorithms (both Optimal and Greedy assignment mechanisms).
 
 ![Shavtzachi](https://img.shields.io/badge/Status-Production_Ready-brightgreen)
-![Tech Stack](https://img.shields.io/badge/Stack-React%20%7C%20FastAPI%20%7C%20SQLite-blue)
+![Tech Stack](https://img.shields.io/badge/Stack-React%20%7C%20FastAPI%20%7C%20SQLite%20%2F%20GSheets-blue)
 
 ---
 
@@ -14,14 +14,15 @@ Shavtzachi is an automated, constraints-based personnel shift scheduler. Designe
 - **Real-Time Conflict Detection:** Identify rule violations instantly in the UI during Draft Mode before finalizing a schedule.
 - **Dynamic Personnel Profiling:** Attach specialized skills (Roles), track past workload intensity scores, and manage temporary unavailabilities/leave.
 - **Export Capabilities:** Export robust and color-coded final schedules seamlessly into Excel files, and bulk import/export configurations (Posts & Soldiers) via CSV.
-- **Standalone Mode:** Build a single-executable native desktop wrapper that requires zero technical installation on the end user's machine.
+- **Multi-Backend Support:** Choice between local SQLite database (for offline use) or Google Sheets backend (for collaborative, cloud-synced management).
+- **Desktop Flow:** Build a single-executable native application that opens in your system browser and automatically shuts down when you're done.
 
 ---
 
 ## 🚀 Tech Stack
 
 - **Backend:** Python + FastAPI 
-- **Database:** SQLite3 via SQLAlchemy
+- **Database:** SQLite3 or Google Sheets API
 - **Scheduling Engines:** Custom algorithms leveraging combinatorial rules and history heuristics.
 - **Frontend:** React + Vite, TailwindCSS, Shadcn-UI (Radix) styled components.
 
@@ -74,10 +75,13 @@ npm run dev
 If you just want to use the application without dealing with code, you do not need to install Python or Node.js. 
 
 1. **Go to the Releases Page:** Visit the [Releases page](https://github.com/yairkl/shavtzachi/releases) of this repository.
-2. **Download the App:** Download the latest version of the executable file (e.g., `shavtzachi.exe` for Windows).
-3. **Run the App:** Move the downloaded file into a dedicated folder (e.g., `Documents/Shavtzachi`). Double-click the file to open it. 
-   - *Note:* The first time you open it, a black console window will appear and a web browser will automatically open the application.
-4. **Your Data:** A `data.db` file will automatically be created in the same folder as the executable. **Do not delete this file**, as it holds all of your saved schedules and soldier constraints!
+2. **Download the App:** Download the latest version of the executable file (e.g., `shavtzachi-windows.exe` for Windows).
+3. **Run the App:** Move the downloaded file into a dedicated folder. Double-click the file to open it. 
+   - *Note:* A web browser will automatically open the application.
+   - *Auto-Shutdown:* To close the application, simply close the browser tab. The background process will automatically shut down after a few seconds.
+4. **Data Management:**
+   - **SQLite Mode:** A `data.db` file will be created next to the executable. **Do not delete this file**.
+   - **GSheets Mode:** If configured, the app will sync directly with your Google Spreadsheet.
 
 ---
 
@@ -110,7 +114,9 @@ When running the standalone executable, all constraints, personnel, and schedule
 
 ## 🗃️ Application Architecture Snippet
 
-- `models.py`: Central declarative schema for relational tracking between Users, Shifts, Assigments, Unavailabilities and Dynamic Posts.
-- `schedule.py`: Contains the constraint-evaluator rulesets (`evaluate_soldier_fitness`) and shift deployment algorithms (`solve_shift_assignment`).
-- `export_utils.py`: Contains Excel integration logic using `openpyxl`.
-- `build.py`: CI script that compiles PyInstaller builds.
+- `models.py`: Central declarative schema for relational tracking.
+- `database.py`: Unified database entry point that handles backend selection (SQLite vs. GSheets).
+- `database_gsheets.py`: Implementation of the Google Sheets backend.
+- `schedule.py`: Contains the constraint-evaluator rulesets and shift deployment algorithms.
+- `desktop.py`: Entry point for the release build; manages browser opening and heartbeat-based auto-shutdown.
+- `build.py`: CI script that compiles PyInstaller builds with bundled configuration.

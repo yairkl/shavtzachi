@@ -37,6 +37,7 @@ def main():
     add_data_arg = f"{dist_dir}{sep}frontend/dist"
     
     add_data_cred = f"credentials.json{sep}."
+    add_data_config = f"config.json{sep}."
     
     cmd = [
         sys.executable, "-m", "PyInstaller",
@@ -44,7 +45,8 @@ def main():
         "--onefile",
         "--add-data", add_data_arg,
         "--add-data", add_data_cred,
-        "main.py"
+        "--add-data", add_data_config,
+        "desktop.py"
     ]
     
     try:

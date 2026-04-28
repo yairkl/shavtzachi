@@ -12,6 +12,7 @@ function App() {
   const [authStatus, setAuthStatus] = useState({ authenticated: null, backend: null });
   const [loading, setLoading] = useState(true);
 
+
   useEffect(() => {
     fetch('/api/auth/status')
       .then(res => res.json())
@@ -23,6 +24,7 @@ function App() {
         console.error("Auth check failed:", err);
         setLoading(false);
       });
+
   }, []);
 
   if (loading) {

@@ -38,13 +38,25 @@ CREDENTIALS_FILE = get_resource_path('credentials.json')
 EXTERNAL_CREDENTIALS_FILE = os.path.join(get_base_path(), 'credentials.json')
 
 
-def _load_config():
+def load_config():
+    """Load config.json from external file or bundled resource."""
+    # Try external first (next to the executable)
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r') as f:
                 return json.load(f)
         except Exception:
             pass
+    
+    # Try bundled second (inside the executable)
+    bundled_config = get_resource_path('config.json')
+    if os.path.exists(bundled_config):
+        try:
+            with open(bundled_config, 'r') as f:
+                return json.load(f)
+        except Exception:
+            pass
+            
     return {}
 
 
@@ -53,7 +65,7 @@ def _is_gsheets_configured(config: dict) -> bool:
 
 
 def _create_db_instance():
-    config = _load_config()
+    config = load_config()
     if _is_gsheets_configured(config):
         logger.info("Database backend: Google Sheets")
         from database_gsheets import ShavtzachiDB as GSheetDB
@@ -102,7 +114,7 @@ def reset_db_instance():
 # Expose ShavtzachiDB as the public type for type hints.
 # We resolve it lazily to avoid importing gsheets libs unless actually needed.
 def _get_shavtzachi_db_class():
-    config = _load_config()
+    config = load_config()
     if _is_gsheets_configured(config):
         from database_gsheets import ShavtzachiDB
     else:
@@ -122,7 +134,7 @@ class ShavtzachiDB:
 
 def init_db(eng=None):
     """Initialise the database schema (SQLite only; no-op for GSheets)."""
-    config = _load_config()
+    config = load_config()
     if not _is_gsheets_configured(config):
         from database_sqlite import init_db as sqlite_init_db
         if eng is None:

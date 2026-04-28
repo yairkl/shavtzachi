@@ -9,7 +9,7 @@ import webbrowser
 import threading
 import time
 from database import (
-    ShavtzachiDB, get_db_instance, reset_db_instance, _load_config, _is_gsheets_configured,
+    ShavtzachiDB, get_db_instance, reset_db_instance, load_config, _is_gsheets_configured,
     TOKEN_FILE, CREDENTIALS_FILE, EXTERNAL_CREDENTIALS_FILE, get_base_path
 )
 from models import Soldier, Post, Shift, Assignment, Skill, PostTemplateSlot, Unavailability
@@ -29,14 +29,13 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Pre-load data on startup (only if already authenticated)
-    config = _load_config()
+    config = load_config()
     if _is_gsheets_configured(config) and os.path.exists(TOKEN_FILE):
         try:
             db = get_db_instance()
             db.reload_cache()
         except Exception as e:
             logger.warning(f"Could not pre-load GSheets cache on startup: {e}")
-    threading.Thread(target=open_browser, daemon=True).start()
     yield
 
 app = FastAPI(title="Shavtzachi API", lifespan=lifespan)
@@ -582,6 +581,39 @@ def check_manpower(start_date: datetime, end_date: datetime, db: ShavtzachiDB = 
         raise HTTPException(status_code=500, detail=str(e))
 
 # ---------------------------------------------------------------------------
+# Desktop / Heartbeat logic
+# ---------------------------------------------------------------------------
+
+DESKTOP_MODE = False
+last_heartbeat = time.time()
+heartbeat_lock = threading.Lock()
+
+def monitor_heartbeat():
+    """Background thread that kills the process if heartbeat is lost."""
+    # Give a long grace period (60s) for startup and first load
+    logger.info("Heartbeat monitor: waiting for initial connection...")
+    time.sleep(60)
+    
+    while True:
+        time.sleep(10)
+        with heartbeat_lock:
+            elapsed = time.time() - last_heartbeat
+        
+        # 30s timeout is more robust for network hiccups or slow machines
+        if elapsed > 30:
+            logger.info(f"Heartbeat lost ({elapsed:.1f}s). Shutting down.")
+            # Use os._exit to kill the whole process group including uvicorn
+            os._exit(0)
+
+@api_router.get("/desktop/heartbeat")
+def get_heartbeat():
+    global last_heartbeat
+    with heartbeat_lock:
+        last_heartbeat = time.time()
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
 # Auth routes
 # ---------------------------------------------------------------------------
 
@@ -594,7 +626,7 @@ OAUTH_SCOPES = [
 @api_router.get("/auth/status")
 def auth_status():
     """Returns whether the app is authenticated and which backend is active."""
-    config = _load_config()
+    config = load_config()
     if not _is_gsheets_configured(config):
         return {"authenticated": True, "backend": "sqlite"}
 
@@ -639,7 +671,7 @@ def auth_status():
 @api_router.get("/auth/login")
 def auth_login():
     """Redirect the browser to Google's OAuth consent screen."""
-    config = _load_config()
+    config = load_config()
     if not _is_gsheets_configured(config):
         raise HTTPException(status_code=400, detail="App is using SQLite backend — no login required.")
 
@@ -745,9 +777,6 @@ if os.path.exists(frontend_dist):
 else:
     logger.warning(f"Frontend dist directory not found at {frontend_dist}")
 
-def open_browser():
-    time.sleep(1.5)
-    webbrowser.open("http://localhost:8001")
 
 if __name__ == "__main__":
     import uvicorn
