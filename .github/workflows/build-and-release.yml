@@ -28,6 +28,12 @@ jobs:
         with:
           python-version: '3.9'
 
+      - name: Create credentials and config files
+        shell: bash
+        run: |
+          echo '${{ secrets.CREDENTIALS_JSON }}' > credentials.json
+          echo '${{ secrets.CONFIG_JSON }}' > config.json
+
       - name: Run Build Script
         run: python build.py
 

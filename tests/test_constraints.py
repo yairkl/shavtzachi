@@ -99,8 +99,7 @@ def test_unavailability_constraint(db, skill_guard):
     shifts = generate_shifts([post], start, end)
     for i, s in enumerate(shifts): s.id = i + 100
     
-    from sqlalchemy.orm import joinedload
-    soldier_with_unavail = db.query(Soldier).options(joinedload(Soldier.unavailabilities)).filter(Soldier.id == soldier.id).first()
+    soldier_with_unavail = db.get_soldier_by_id(soldier.id, include_unavailabilities=True)
     
     print("UNAVAILABILITIES:", soldier_with_unavail.unavailabilities)
     assignments = solve_shift_assignment(shifts, [soldier_with_unavail])

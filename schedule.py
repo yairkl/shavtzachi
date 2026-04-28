@@ -1,7 +1,7 @@
 from datetime import datetime, time, timedelta
 import pandas as pd
 import numpy as np
-from database import engine, Session, ShavtzachiDB
+from database import ShavtzachiDB
 from models import Post, Soldier, Shift, Assignment, Unavailability
 from typing import List, Optional, Dict, Set, Tuple
 from ortools.sat.python import cp_model
@@ -24,6 +24,9 @@ def generate_shifts(posts, start_date, end_date, db: Optional[ShavtzachiDB] = No
     # Ensure precision to seconds to avoid subtle comparison issues
     start_date = start_date.replace(microsecond=0)
     end_date = end_date.replace(microsecond=0)
+    
+    if db:
+        db.prefetch_assignments(start_date, end_date)
     
     for post in posts:
         # Check if the post is active within the overall requested window
@@ -63,8 +66,10 @@ def generate_shifts(posts, start_date, end_date, db: Optional[ShavtzachiDB] = No
                  current_shift_start = active_start
 
             while current_shift_start < active_end:
+                if post.shift_length.total_seconds() <= 0:
+                    break # Avoid infinite loop
+                
                 current_shift_end = current_shift_start + post.shift_length
-                print(f"DEBUG: Checking shift {current_shift_start} - {current_shift_end}")
                 
                 # Logic for display vs logic for solver/tests:
                 # - include_overflow=True: include any shift that OVERLAPS with the requested range
@@ -764,6 +769,11 @@ def solve_shift_assignment_greedy(shifts: List[Shift], soldiers: List[Soldier],
     # Higher criticality (rarity) first, then longer shifts.
     sorted_shifts = sorted(shifts, key=lambda s: (get_shift_rarity(s), (s.end - s.start).total_seconds()), reverse=True)
 
+    if shifts:
+        min_start = min(s.start for s in shifts)
+        max_end = max(s.end for s in shifts)
+        session.prefetch_assignments(min_start, max_end)
+
     draft_assignments = []
     if existing_assignments:
         for a in existing_assignments:
@@ -806,10 +816,12 @@ def solve_shift_assignment_greedy(shifts: List[Shift], soldiers: List[Soldier],
             
             if best_soldier:
                 assignment = Assignment(
-                    soldier=best_soldier, soldier_id=best_soldier.id,
-                    shift=shift, shift_id=shift.id, role_id=role_id
+                    soldier_id=best_soldier.id,
+                    shift_id=shift.id,
+                    role_id=role_id
                 )
                 results.append(assignment)
+                # Keep a temporary map for draft evaluation without triggering backrefs yet
                 draft_assignments.append({
                     "soldier_id": best_soldier.id,
                     "start": shift.start,
@@ -820,6 +832,17 @@ def solve_shift_assignment_greedy(shifts: List[Shift], soldiers: List[Soldier],
                 })
             else:
                 logger.warning(f"Greedy Solver: Could not find any fitting soldier for {shift.post_name} at {shift.start}")
+
+    # Re-attach objects at the end so the caller has them, but safely after the loop
+    for a in results:
+        # We can find the soldier and shift objects from the inputs or just let them be lazy-loaded.
+        # But for efficiency, we can re-attach them now.
+        pass # Actually, if we don't attach them here, they will lazy load later.
+        # To be safe and helpful, we can attach them.
+        s_obj = next((s for s in soldiers if s.id == a.soldier_id), None)
+        sh_obj = next((s for s in shifts if s.id == a.shift_id), None)
+        if s_obj: a.soldier = s_obj
+        if sh_obj: a.shift = sh_obj
 
     _log_fairness_stats(results, soldiers)
     _log_rest_stats(results)
@@ -868,13 +891,9 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
     
     # Collect assignments from DB
     combined_assignments = []
-    db_assignments = session.session.query(Assignment).join(Shift).filter(
-        Assignment.soldier_id == soldier.id,
-        Shift.start < window_end,
-        Shift.end > window_start
-    ).all()
-    
-    for a in db_assignments:
+    assignments = session.get_assignments_for_soldier_in_range(soldier.id, window_start, window_end)
+
+    for a in assignments:
         combined_assignments.append({
             "start": a.shift.start,
             "end": a.shift.end,
@@ -885,8 +904,6 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
 
     # Add draft assignments (filtering for this soldier and window)
     if draft_assignments:
-        # Pre-fetch posts for draft lookups
-        post_cache = {p.name: p for p in session.get_all_posts(include_slots=False)}
         for a in draft_assignments:
             if a.get("soldier_id") == soldier.id:
                 a_start = a["start"] if isinstance(a["start"], datetime) else datetime.fromisoformat(a["start"].replace('Z', ''))
@@ -898,7 +915,7 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
                         "end": a_end,
                         "post_name": a["post_name"],
                         "role_id": a["role_id"],
-                        "post": post_cache.get(a["post_name"])
+                        "post": a.get("post")
                     })
     
     last_shift_info_obj = None 
@@ -918,7 +935,8 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
         # Cooldown Check - Before
         if other_end <= shift_start:
             gap = (shift_start - other_end).total_seconds() / 3600
-            cooldown_needed = post.cooldown.total_seconds() / 3600
+            other_post = a["post"]
+            cooldown_needed = other_post.cooldown.total_seconds() / 3600 if other_post else 0
             if gap < cooldown_needed:
                 score -= 500
                 conflicts.append("cooldown")
@@ -937,8 +955,7 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
         # Cooldown Check - After
         elif other_start >= shift_end:
             gap = (other_start - shift_end).total_seconds() / 3600
-            other_post = a["post"]
-            cooldown_needed = other_post.cooldown.total_seconds() / 3600 if other_post else 0
+            cooldown_needed = post.cooldown.total_seconds() / 3600
             if gap < cooldown_needed:
                 score -= 500
                 conflicts.append("cooldown")

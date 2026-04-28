@@ -75,6 +75,10 @@ const ConflictTooltip = ({ icon: Icon, color, message, warnings }) => {
 // ---------------------------------------------------------------------------
 
 function validateAssignments(shifts, posts, soldiers, unavailabilities = []) {
+  if (!Array.isArray(shifts)) {
+    console.error("validateAssignments error: 'shifts' is not an array", shifts);
+    return [];
+  }
   const warnings = []; // { slotIndex, type, message }
 
   // Build lookups
@@ -253,8 +257,20 @@ export default function Scheduler() {
         getShiftsWithAssignments(start, endStr),
         getUnavailabilities(start, endStr)
       ]);
-      setShifts(shiftsRes.data);
-      setUnavailabilities(unavailRes.data);
+      
+      if (Array.isArray(shiftsRes.data)) {
+        setShifts(shiftsRes.data);
+      } else {
+        console.error("fetchDaySlots: received non-array shifts data", shiftsRes.data);
+        setShifts([]);
+      }
+      
+      if (Array.isArray(unavailRes.data)) {
+        setUnavailabilities(unavailRes.data);
+      } else {
+        setUnavailabilities([]);
+      }
+      
       setIsDraft(false);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
@@ -314,7 +330,9 @@ export default function Scheduler() {
   // Unique skills across all slots for the filter dropdown
   const allSkills = useMemo(() => {
     const skills = new Set();
-    shifts.forEach(s => { if (s.skill) skills.add(s.skill); });
+    if (Array.isArray(shifts)) {
+      shifts.forEach(s => { if (s.skill) skills.add(s.skill); });
+    }
     return Array.from(skills).sort();
   }, [shifts]);
 

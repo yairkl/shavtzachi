@@ -36,11 +36,14 @@ def main():
     sep = ";" if os.name == "nt" else ":"
     add_data_arg = f"{dist_dir}{sep}frontend/dist"
     
+    add_data_cred = f"credentials.json{sep}."
+    
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--name", "shavtzachi",
         "--onefile",
         "--add-data", add_data_arg,
+        "--add-data", add_data_cred,
         "main.py"
     ]
     

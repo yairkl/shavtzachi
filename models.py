@@ -47,6 +47,7 @@ class Soldier(Base):
     skills = relationship('Skill', secondary=soldier_skill_table, back_populates='soldiers')
     excluded_posts = relationship('Post', secondary=soldier_excluded_post_table)
     unavailabilities = relationship('Unavailability', back_populates='soldier')
+    assignments = relationship('Assignment', back_populates='soldier')
 
 class Unavailability(Base):
     __tablename__ = 'unavailability'
@@ -56,8 +57,9 @@ class Unavailability(Base):
     start_datetime = Column(DateTime, nullable=False)
     end_datetime = Column(DateTime, nullable=False)
     reason = Column(Text, nullable=True)
-    soldier = relationship("Soldier", back_populates="unavailabilities")
-
+    soldier_name = Column(Text, nullable=True)
+    soldier = relationship("Soldier", back_populates='unavailabilities')
+    
 class Division(Base):
     __tablename__ = 'division'
     __table_args__ = {'extend_existing': True}
@@ -79,6 +81,14 @@ class Post(Base):
     active_until = Column(DateTime, nullable=True)
     slots = relationship("PostTemplateSlot", back_populates="post", cascade="all, delete, delete-orphan")
 
+    def __init__(self, **kwargs):
+        kwargs.setdefault('start_time', time(6, 0, 0))
+        kwargs.setdefault('end_time', time(5, 59, 0))
+        kwargs.setdefault('shift_length', timedelta(hours=4))
+        kwargs.setdefault('cooldown', timedelta(hours=0))
+        kwargs.setdefault('intensity_weight', 1.0)
+        super().__init__(**kwargs)
+
 class PostTemplateSlot(Base):
     __tablename__ = 'post_template_slot'
     __table_args__ = {'extend_existing': True}
@@ -97,13 +107,14 @@ class Shift(Base):
     post = relationship("Post")
     start = Column(DateTime, nullable=False)
     end = Column(DateTime, nullable=False)
+    assignments = relationship("Assignment", back_populates="shift")
 
 class Assignment(Base):
     __tablename__ = 'assignment'
     __table_args__ = (UniqueConstraint('soldier_id', 'shift_id'), {'extend_existing': True})
     id = Column(Integer, primary_key=True, autoincrement=True)
     soldier_id = Column(Integer, ForeignKey('soldier.id'),nullable=False)
-    soldier = relationship("Soldier")
+    soldier = relationship("Soldier", back_populates='assignments')
     shift_id = Column(Integer, ForeignKey('shift.id'), nullable=False)
-    shift = relationship("Shift")
+    shift = relationship("Shift", back_populates='assignments')
     role_id = Column(Integer)

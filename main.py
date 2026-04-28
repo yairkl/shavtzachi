@@ -1,15 +1,14 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 import os
 import sys
 import webbrowser
 import threading
 import time
-from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func
-from database import engine, Session as DBSession, ShavtzachiDB
+from database import ShavtzachiDB, get_db_instance, reset_db_instance, _load_config, _is_gsheets_configured
 from models import Soldier, Post, Shift, Assignment, Skill, PostTemplateSlot, Unavailability
 from schedule import generate_shifts, solve_shift_assignment, solve_shift_assignment_greedy
 from pydantic import BaseModel, field_validator
@@ -24,7 +23,20 @@ from export_utils import export_schedule_to_excel
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Shavtzachi API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Pre-load data on startup (only if already authenticated)
+    config = _load_config()
+    if _is_gsheets_configured(config) and os.path.exists("token.json"):
+        try:
+            db = get_db_instance()
+            db.reload_cache()
+        except Exception as e:
+            logger.warning(f"Could not pre-load GSheets cache on startup: {e}")
+    threading.Thread(target=open_browser, daemon=True).start()
+    yield
+
+app = FastAPI(title="Shavtzachi API", lifespan=lifespan)
 api_router = APIRouter(prefix="/api")
 
 app.add_middleware(
@@ -36,12 +48,7 @@ app.add_middleware(
 )
 
 def get_db():
-    db_session = DBSession()
-    db = ShavtzachiDB(db_session)
-    try:
-        yield db
-    finally:
-        db_session.close()
+    yield get_db_instance()
 
 # --- Pydantic Schemas ---
 
@@ -133,7 +140,14 @@ def get_soldiers(db: ShavtzachiDB = Depends(get_db)):
 
 @api_router.post("/soldiers")
 def create_soldier(s_data: SoldierCreate, db: ShavtzachiDB = Depends(get_db)):
-    return db.create_soldier(s_data.name, s_data.skills, s_data.division, s_data.excluded_posts)
+    s = db.create_soldier(s_data.name, s_data.skills, s_data.division, s_data.excluded_posts)
+    return {
+        "id": s.id,
+        "name": s.name,
+        "division": s.division,
+        "skills": [sk.name for sk in s.skills],
+        "excluded_posts": [p.name for p in s.excluded_posts]
+    }
 
 @api_router.put("/soldiers/{s_id}")
 def update_soldier(s_id: int, s_data: SoldierCreate, db: ShavtzachiDB = Depends(get_db)):
@@ -227,26 +241,16 @@ def export_soldiers(db: ShavtzachiDB = Depends(get_db)):
 async def import_soldiers(file: UploadFile = File(...), db: ShavtzachiDB = Depends(get_db)):
     content = await file.read()
     reader = csv.DictReader(io.StringIO(content.decode("utf-8")))
+    soldiers_data = []
     for row in reader:
-        soldier = db.get_soldier_by_name(row["name"])
-        if not soldier:
-            soldier = Soldier(name=row["name"])
-            db.session.add(soldier)
-        soldier.division = int(row["division"]) if row["division"] else None
-        soldier.skills = []
-        for sk_name in row["skills"].split(","):
-            if not sk_name.strip(): continue
-            skill = db.get_or_create_skill(sk_name.strip())
-            soldier.skills.append(skill)
-            
-        soldier.excluded_posts = []
-        if "excluded_posts" in row:
-            for p_name in row["excluded_posts"].split(","):
-                if not p_name.strip(): continue
-                post = db.get_post_by_name(p_name.strip())
-                if post:
-                    soldier.excluded_posts.append(post)
-    db.commit()
+        soldiers_data.append({
+            "name": row["name"],
+            "division": int(row["division"]) if row.get("division") else None,
+            "skills": [s.strip() for s in row["skills"].split(",") if s.strip()],
+            "excluded_posts": [p.strip() for p in row.get("excluded_posts", "").split(",") if p.strip()]
+        })
+    
+    db.batch_upsert_soldiers(soldiers_data)
     return {"status": "success"}
 
 @api_router.get("/posts/export")
@@ -274,25 +278,21 @@ def export_posts(db: ShavtzachiDB = Depends(get_db)):
 async def import_posts(file: UploadFile = File(...), db: ShavtzachiDB = Depends(get_db)):
     content = await file.read()
     reader = csv.DictReader(io.StringIO(content.decode("utf-8")))
+    posts_data = []
     for row in reader:
-        post = db.get_post_by_name(row["name"])
-        if not post:
-            post = Post(name=row["name"])
-            db.session.add(post)
-        post.shift_length = timedelta(hours=float(row["shift_length_hours"]))
-        post.start_time = datetime.strptime(row["start_time"], "%H:%M").time()
-        post.end_time = datetime.strptime(row["end_time"], "%H:%M").time()
-        post.cooldown = timedelta(hours=float(row["cooldown_hours"]))
-        post.intensity_weight = float(row["intensity_weight"])
-        post.active_from = datetime.fromisoformat(row["active_from"]) if row.get("active_from") else None
-        post.active_until = datetime.fromisoformat(row["active_until"]) if row.get("active_until") else None
-        
-        db.session.query(PostTemplateSlot).filter(PostTemplateSlot.post_name == post.name).delete()
-        for i, sk_name in enumerate(row["slots"].split(",")):
-            if not sk_name.strip(): continue
-            skill = db.get_or_create_skill(sk_name.strip())
-            db.session.add(PostTemplateSlot(post=post, role_index=i, skill=skill))
-    db.commit()
+        posts_data.append({
+            "name": row["name"],
+            "shift_length_hours": float(row["shift_length_hours"]),
+            "start_time": datetime.strptime(row["start_time"], "%H:%M").time(),
+            "end_time": datetime.strptime(row["end_time"], "%H:%M").time(),
+            "cooldown_hours": float(row["cooldown_hours"]),
+            "intensity_weight": float(row["intensity_weight"]),
+            "slots": [s.strip() for s in row["slots"].split(",") if s.strip()],
+            "active_from": datetime.fromisoformat(row["active_from"]) if row.get("active_from") else None,
+            "active_until": datetime.fromisoformat(row["active_until"]) if row.get("active_until") else None
+        })
+    
+    db.batch_upsert_posts(posts_data)
     return {"status": "success"}
 
 # --- Endpoints: Scheduler ---
@@ -327,6 +327,7 @@ def get_shifts_with_assignments(start_date: datetime, end_date: datetime, db: Sh
                     "soldier_id": a.soldier_id if a else None,
                     "soldier_name": a.soldier.name if a else None,
                 })
+        logger.info(f"Returning {len(result)} shifts to client.")
         return result
     except Exception as e:
         logger.error(f"Get shifts error: {e}")
@@ -481,38 +482,34 @@ def save_schedule(req: SaveScheduleRequest, db: ShavtzachiDB = Depends(get_db)):
         end_naive = req.end_date.replace(tzinfo=None)
 
         posts = db.get_all_posts()
-        all_shifts = generate_shifts(posts, start_naive, end_naive, db=db)
-        shift_lookup = {(s.post_name, s.start.replace(microsecond=0).isoformat()): s.id for s in all_shifts}
-
-        shift_ids_to_clear = {s.id for s in all_shifts if s.start >= start_naive and s.start < end_naive}
+        soldiers_by_id = {s.id: s for s in db.get_all_soldiers()}
         
-        payload_with_sids = []
+        assignments_data = []
         for a_data in req.assignments:
-            start_iso = a_data.start.replace(tzinfo=None, microsecond=0).isoformat()
-            sid = shift_lookup.get((a_data.post_name, start_iso))
-            if sid:
-                shift_ids_to_clear.add(sid)
-                payload_with_sids.append((sid, a_data))
-            else:
-                logger.warning(f"Could not find shift for {a_data.post_name} at {start_iso}")
+            post = next((p for p in posts if p.name == a_data.post_name), None)
+            if not post: continue
+            
+            s_start = a_data.start.replace(tzinfo=None)
+            s_end = s_start + post.shift_length
+            
+            soldier = soldiers_by_id.get(a_data.soldier_id)
+            if not soldier: continue
+            
+            assignments_data.append({
+                'soldier_name': soldier.name,
+                'division_id': soldier.division,
+                'post_name': a_data.post_name,
+                'start': s_start,
+                'end': s_end,
+                'role_id': a_data.role_id
+            })
 
-        if shift_ids_to_clear:
-            db.clear_assignments_by_ids(list(shift_ids_to_clear))
-
-        seen_assignments = set()
-        for sid, a_data in payload_with_sids:
-            if (a_data.soldier_id, sid) in seen_assignments:
-                logger.warning(f"Duplicate assignment detected in payload for soldier {a_data.soldier_id} in shift {sid}. Skipping.")
-                continue
-            db.add_assignment(a_data.soldier_id, sid, a_data.role_id)
-            seen_assignments.add((a_data.soldier_id, sid))
+        db.save_assignments_to_grid(assignments_data, start_naive, end_naive)
         
-        db.commit()
         return {"status": "success"}
     except Exception as e:
         logger.error(f"Save schedule error: {str(e)}")
         import traceback; traceback.print_exc()
-        db.rollback(); 
         raise HTTPException(status_code=500, detail=str(e))
 
 # --- Endpoints: Unavailability ---
@@ -580,14 +577,147 @@ def check_manpower(start_date: datetime, end_date: datetime, db: ShavtzachiDB = 
         logger.error(f"Manpower check error: {e}")
         import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+# ---------------------------------------------------------------------------
+# Auth routes
+# ---------------------------------------------------------------------------
+
+OAUTH_REDIRECT_URI = "http://localhost:8001/api/auth/callback"
+OAUTH_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+@api_router.get("/auth/status")
+def auth_status():
+    """Returns whether the app is authenticated and which backend is active."""
+    config = _load_config()
+    if not _is_gsheets_configured(config):
+        return {"authenticated": True, "backend": "sqlite"}
+
+    if not os.path.exists("token.json"):
+        return {"authenticated": False, "backend": "gsheets", "reason": "no_token"}
+
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        import json
+        
+        creds = Credentials.from_authorized_user_file("token.json", OAUTH_SCOPES)
+        
+        # Verify client_id matches credentials.json (prevents 403 when switching cred types)
+        if os.path.exists("credentials.json"):
+            with open("credentials.json") as f:
+                cdata = json.load(f)
+                cid = cdata.get("web", {}).get("client_id") or cdata.get("installed", {}).get("client_id")
+                if cid and creds.client_id != cid:
+                    os.remove("token.json")
+                    return {"authenticated": False, "backend": "gsheets", "reason": "credential_mismatch"}
+
+        if creds.valid:
+            return {"authenticated": True, "backend": "gsheets"}
+        if creds.expired and creds.refresh_token:
+            try:
+                creds.refresh(Request())
+                with open("token.json", "w") as f:
+                    f.write(creds.to_json())
+                return {"authenticated": True, "backend": "gsheets"}
+            except Exception as e:
+                logger.warning(f"Token refresh failed: {e}")
+                os.remove("token.json")
     except Exception as e:
-        logger.error(f"Manpower check error: {e}")
-        import traceback; traceback.print_exc()
+        logger.error(f"Auth status check error: {e}")
+        pass
+
+    return {"authenticated": False, "backend": "gsheets", "reason": "invalid_token"}
+
+
+@api_router.get("/auth/login")
+def auth_login():
+    """Redirect the browser to Google's OAuth consent screen."""
+    config = _load_config()
+    if not _is_gsheets_configured(config):
+        raise HTTPException(status_code=400, detail="App is using SQLite backend — no login required.")
+
+    if not os.path.exists("credentials.json"):
+        raise HTTPException(status_code=500, detail="credentials.json not found on server.")
+
+    try:
+        from google_auth_oauthlib.flow import Flow
+        import json
+        with open("credentials.json") as f:
+            client_config = json.load(f)
+
+        # Support both 'web' and 'installed' credential types
+        cred_type = "web" if "web" in client_config else "installed"
+        flow = Flow.from_client_secrets_file(
+            "credentials.json",
+            scopes=OAUTH_SCOPES,
+            redirect_uri=OAUTH_REDIRECT_URI,
+        )
+        auth_url, _ = flow.authorization_url(
+            access_type="offline",
+            include_granted_scopes="true",
+            prompt="consent",
+        )
+        
+        # PERSIST PKCE VERIFIER: The flow generates a code_verifier for PKCE.
+        # Since we are stateless across requests, we must save it to use in the callback.
+        if hasattr(flow, 'code_verifier'):
+            with open(".code_verifier", "w") as f:
+                f.write(flow.code_verifier)
+                
+        return RedirectResponse(url=auth_url)
+    except Exception as e:
+        logger.error(f"Auth login error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-app.include_router(api_router)
 
-# Provide a fallback SPA route and serve static files
+@api_router.get("/auth/callback")
+def auth_callback(code: str, state: Optional[str] = None, error: Optional[str] = None):
+    """Handle OAuth callback from Google. Saves token.json and reloads DB."""
+    if error:
+        return RedirectResponse(url=f"/?auth_error={error}")
+
+    if not os.path.exists("credentials.json"):
+        raise HTTPException(status_code=500, detail="credentials.json not found on server.")
+
+    try:
+        from google_auth_oauthlib.flow import Flow
+        flow = Flow.from_client_secrets_file(
+            "credentials.json",
+            scopes=OAUTH_SCOPES,
+            redirect_uri=OAUTH_REDIRECT_URI,
+        )
+        
+        # RESTORE PKCE VERIFIER:
+        if os.path.exists(".code_verifier"):
+            with open(".code_verifier", "r") as f:
+                flow.code_verifier = f.read().strip()
+            os.remove(".code_verifier") # Clean up
+            
+        flow.fetch_token(code=code)
+        creds = flow.credentials
+        with open("token.json", "w") as f:
+            f.write(creds.to_json())
+        logger.info("OAuth callback: token saved successfully.")
+
+        # Reset DB singleton so it reinitialises with the new token
+        reset_db_instance()
+        try:
+            db = get_db_instance()
+            db.reload_cache()
+        except Exception as e:
+            logger.warning(f"Could not reload cache after auth: {e}")
+
+        # Redirect to frontend root
+        return RedirectResponse(url="/")
+    except Exception as e:
+        logger.error(f"Auth callback error: {e}")
+        return RedirectResponse(url=f"/?auth_error={str(e)}")
+
+
+app.include_router(api_router)
 def get_frontend_dist():
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, "frontend", "dist")
@@ -610,10 +740,6 @@ else:
 def open_browser():
     time.sleep(1.5)
     webbrowser.open("http://localhost:8001")
-
-@app.on_event("startup")
-def on_startup():
-    threading.Thread(target=open_browser, daemon=True).start()
 
 if __name__ == "__main__":
     import uvicorn

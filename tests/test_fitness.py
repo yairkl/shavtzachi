@@ -246,7 +246,7 @@ def test_future_mission_diversity(db, setup_fitness_data):
     db.add(future_shift_other)
     db.commit()
     # (Existing assignment for soldier to Front Gate still in DB, we'll clear it first for clean comparison)
-    db.query(Assignment).filter(Assignment.soldier_id == soldier.id).delete()
+    db.delete_assignments_for_soldier(soldier.id)
     db.add(Assignment(soldier=soldier, shift=future_shift_other, role_id=0))
     db.commit()
 

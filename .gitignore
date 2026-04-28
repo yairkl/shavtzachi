@@ -23,3 +23,10 @@ dist/
 data/
 scratch/
 build/
+.code_verifier
+
+# Secrets and Configs
+credentials.json
+credentials_desktop.json
+token.json
+config.json

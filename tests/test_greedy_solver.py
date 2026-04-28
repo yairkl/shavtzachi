@@ -91,7 +91,7 @@ def test_greedy_rarity_criticality_ordering(db, greedy_data):
     shifts_common = generate_shifts([greedy_data["common_post"]], start, end, db)
     
     all_shifts = shifts_rare + shifts_common
-    all_soldiers = db.query(Soldier).all()
+    all_soldiers = db.get_all_soldiers()
     
     assignments = solve_shift_assignment_greedy(all_shifts, all_soldiers, session=db)
     

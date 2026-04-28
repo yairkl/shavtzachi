@@ -13,7 +13,7 @@ def test_get_soldiers(client, db):
     db.add(Soldier(name="API Soldier"))
     db.commit()
     
-    response = client.get("/soldiers")
+    response = client.get("/api/soldiers")
     assert response.status_code == 200
     data = response.json()
     assert any(s["name"] == "API Soldier" for s in data)
@@ -38,7 +38,7 @@ def test_schedule_draft(client, db):
         "start_date": "2026-10-01T00:00:00",
         "end_date": "2026-10-01T12:00:00"
     }
-    response = client.post("/schedule/draft", json=payload)
+    response = client.post("/api/schedule/draft", json=payload)
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
@@ -80,7 +80,7 @@ def test_save_schedule_preserves_crossing_shift(client, db):
     db.commit()
     
     # Verify it exists
-    assert db.query(Assignment).count() == 1
+    assert db.count_assignments() == 1
     
     # Simulate saving schedule for Day 1 (starting at midnight)
     payload = {
@@ -97,9 +97,10 @@ def test_save_schedule_preserves_crossing_shift(client, db):
         ]
     }
     
-    response = client.post("/schedule/save", json=payload)
+    response = client.post("/api/schedule/save", json=payload)
     assert response.status_code == 200
     
     # Verify the crossing assignment was preserved
-    crossing_assignment = db.query(Assignment).join(Shift).filter(Shift.start == start_day0_late).first()
+    crossing_assignments = db.get_assignments_in_range(start_day0_late, start_day0_late + timedelta(seconds=1))
+    crossing_assignment = crossing_assignments[0] if crossing_assignments else None
     assert crossing_assignment is not None, "Assignment crossing midnight should have been preserved"

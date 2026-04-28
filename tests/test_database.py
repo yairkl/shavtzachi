@@ -7,7 +7,7 @@ def test_soldier_creation(db):
     db.add(new_soldier)
     db.commit()
     
-    retrieved = db.query(Soldier).filter_by(name="Test Soldier").first()
+    retrieved = db.get_soldier_by_name("Test Soldier")
     assert retrieved.name == "Test Soldier"
 
 def test_post_relationship(db):

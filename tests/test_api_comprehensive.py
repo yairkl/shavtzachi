@@ -16,7 +16,7 @@ class TestPersonnel:
         db.get_or_create_skill("Medic")
         db.commit()
         
-        response = client.get("/skills")
+        response = client.get("/api/skills")
         assert response.status_code == 200
         data = response.json()
         assert "Combat" in data
@@ -29,12 +29,12 @@ class TestPersonnel:
             "skills": ["Driver", "Guard"],
             "division": 1
         }
-        response = client.post("/soldiers", json=payload)
+        response = client.post("/api/soldiers", json=payload)
         assert response.status_code == 200
         soldier_id = response.json()["id"]
 
         # 2. Read
-        response = client.get("/soldiers")
+        response = client.get("/api/soldiers")
         data = response.json()
         soldier = next(s for s in data if s["id"] == soldier_id)
         assert soldier["name"] == "Test Soldier"
@@ -47,19 +47,19 @@ class TestPersonnel:
             "skills": ["Medic"],
             "division": 2
         }
-        response = client.put(f"/soldiers/{soldier_id}", json=update_payload)
+        response = client.put(f"/api/soldiers/{soldier_id}", json=update_payload)
         assert response.status_code == 200
         
-        response = client.get("/soldiers")
+        response = client.get("/api/soldiers")
         soldier = next(s for s in response.json() if s["id"] == soldier_id)
         assert soldier["name"] == "Updated Soldier"
         assert soldier["skills"] == ["Medic"]
 
         # 4. Delete
-        response = client.delete(f"/soldiers/{soldier_id}")
+        response = client.delete(f"/api/soldiers/{soldier_id}")
         assert response.status_code == 200
         
-        response = client.get("/soldiers")
+        response = client.get("/api/soldiers")
         assert not any(s["id"] == soldier_id for s in response.json())
 
 class TestPosts:
@@ -75,11 +75,11 @@ class TestPosts:
             "slots": ["Guard", "Guard"],
             "is_active": True
         }
-        response = client.post("/posts", json=payload)
+        response = client.post("/api/posts", json=payload)
         assert response.status_code == 200
 
         # 2. Read
-        response = client.get("/posts")
+        response = client.get("/api/posts")
         data = response.json()
         post = next(p for p in data if p["name"] == "Gate Guard")
         assert post["shift_length_hours"] == 4
@@ -90,20 +90,20 @@ class TestPosts:
         update_payload = payload.copy()
         update_payload["intensity_weight"] = 2.0
         update_payload["slots"] = ["Medic"]
-        response = client.put("/posts/Gate Guard", json=update_payload)
+        response = client.put("/api/posts/Gate Guard", json=update_payload)
         assert response.status_code == 200
         
-        response = client.get("/posts")
+        response = client.get("/api/posts")
         post = next(p for p in response.json() if p["name"] == "Gate Guard")
         assert post["intensity_weight"] == 2.0
         assert len(post["slots"]) == 1
         assert post["slots"][0]["skill"] == "Medic"
 
         # 4. Delete
-        response = client.delete("/posts/Gate Guard")
+        response = client.delete("/api/posts/Gate Guard")
         assert response.status_code == 200
         
-        response = client.get("/posts")
+        response = client.get("/api/posts")
         assert not any(p["name"] == "Gate Guard" for p in response.json())
 
 class TestCSV:
@@ -112,20 +112,20 @@ class TestCSV:
         db.create_soldier("Export Soldier", ["Skill1"], 1)
         
         # 2. Export
-        response = client.get("/soldiers/export")
+        response = client.get("/api/soldiers/export")
         assert response.status_code == 200
         csv_content = response.text
         assert "Export Soldier" in csv_content
         
         # 3. Modify CSV and Import
-        # Add a new soldier to the CSV
-        modified_csv = csv_content + "Imported Soldier,2,Skill2,0.0\n"
+        # Add a new soldier to the CSV (name, division, skills, history_score, excluded_posts)
+        modified_csv = csv_content + "Imported Soldier,2,Skill2,0.0,\n"
         file = ("soldiers.csv", io.BytesIO(modified_csv.encode("utf-8")))
-        response = client.post("/soldiers/import", files={"file": file})
+        response = client.post("/api/soldiers/import", files={"file": file})
         assert response.status_code == 200
         
         # 4. Verify Import
-        response = client.get("/soldiers")
+        response = client.get("/api/soldiers")
         data = response.json()
         assert any(s["name"] == "Imported Soldier" for s in data)
 
@@ -134,19 +134,20 @@ class TestCSV:
         db.create_post("Export Post", 4, time(8,0), time(12,0), 8, 1.0, ["Skill1"])
         
         # 2. Export
-        response = client.get("/posts/export")
+        response = client.get("/api/posts/export")
         assert response.status_code == 200
         csv_content = response.text
         assert "Export Post" in csv_content
         
         # 3. Modify CSV and Import
-        modified_csv = csv_content + "Imported Post,8.0,12:00,20:00,16.0,1.2,Skill2\n"
+        # Add a new post (name, shift_length_hours, start_time, end_time, cooldown_hours, intensity_weight, slots, active_from, active_until)
+        modified_csv = csv_content + "Imported Post,8.0,12:00,20:00,16.0,1.2,Skill2,,\n"
         file = ("posts.csv", io.BytesIO(modified_csv.encode("utf-8")))
-        response = client.post("/posts/import", files={"file": file})
+        response = client.post("/api/posts/import", files={"file": file})
         assert response.status_code == 200
         
         # 4. Verify Import
-        response = client.get("/posts")
+        response = client.get("/api/posts")
         data = response.json()
         assert any(p["name"] == "Imported Post" for p in data)
 
@@ -163,7 +164,7 @@ class TestScheduler:
     def test_get_shifts_with_assignments(self, client, db, setup_data):
         start = datetime(2025, 1, 1, 0, 0)
         end = datetime(2025, 1, 1, 12, 0)
-        response = client.get(f"/schedule/shifts?start_date={start.isoformat()}&end_date={end.isoformat()}")
+        response = client.get(f"/api/schedule/shifts?start_date={start.isoformat()}&end_date={end.isoformat()}")
         assert response.status_code == 200
         data = response.json()
         assert len(data) > 0
@@ -175,10 +176,9 @@ class TestScheduler:
             "post_name": "Scheduler Post",
             "start": "2025-01-01T08:00:00",
             "end": "2025-01-01T12:00:00",
-            "role_id": 0,
-            "draft_assignments": []
+            "role_id": 0
         }
-        response = client.post("/schedule/candidates", json=payload)
+        response = client.post("/api/schedule/candidates", json=payload)
         assert response.status_code == 200
         data = response.json()
         assert any(c["name"] == "Scheduler Soldier" for c in data)
@@ -190,13 +190,13 @@ class TestScheduler:
             "algorithm": "optimal"
         }
         # Test Optimal
-        response = client.post("/schedule/draft", json=payload)
+        response = client.post("/api/schedule/draft", json=payload)
         assert response.status_code == 200
         assert len(response.json()) > 0
 
         # Test Greedy
         payload["algorithm"] = "greedy"
-        response = client.post("/schedule/draft", json=payload)
+        response = client.post("/api/schedule/draft", json=payload)
         assert response.status_code == 200
         assert len(response.json()) > 0
 
@@ -218,11 +218,11 @@ class TestScheduler:
                 }
             ]
         }
-        response = client.post("/schedule/save", json=payload)
+        response = client.post("/api/schedule/save", json=payload)
         assert response.status_code == 200
 
         # Verify via GET /schedule
-        response = client.get(f"/schedule?start_date=2025-01-01T00:00:00&end_date=2025-01-02T00:00:00")
+        response = client.get(f"/api/schedule?start_date=2025-01-01T00:00:00&end_date=2025-01-02T00:00:00")
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 1
@@ -247,10 +247,10 @@ class TestScheduler:
                 }
             ]
         }
-        client.post("/schedule/save", json=payload)
+        client.post("/api/schedule/save", json=payload)
         
         # 2. Export
-        response = client.get(f"/schedule/export?start_date=2025-01-01T00:00:00&end_date=2025-01-02T00:00:00")
+        response = client.get(f"/api/schedule/export?start_date=2025-01-01T00:00:00&end_date=2025-01-02T00:00:00")
         assert response.status_code == 200
         assert response.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         assert "attachment" in response.headers["content-disposition"]
@@ -282,12 +282,12 @@ class TestUnavailabilities:
             "end_datetime": "2025-01-01T12:00:00",
             "reason": "Test Reason"
         }
-        response = client.post("/unavailabilities", json=payload)
+        response = client.post("/api/unavailabilities", json=payload)
         assert response.status_code == 200
         u_id = response.json()["id"]
 
         # 3. Read
-        response = client.get("/unavailabilities")
+        response = client.get("/api/unavailabilities")
         assert response.status_code == 200
         data = response.json()
         record = next(r for r in data if r["id"] == u_id)
@@ -296,18 +296,18 @@ class TestUnavailabilities:
         # 4. Update
         update_payload = payload.copy()
         update_payload["reason"] = "Updated Reason"
-        response = client.put(f"/unavailabilities/{u_id}", json=update_payload)
+        response = client.put(f"/api/unavailabilities/{u_id}", json=update_payload)
         assert response.status_code == 200
         
-        response = client.get("/unavailabilities")
+        response = client.get("/api/unavailabilities")
         record = next(r for r in response.json() if r["id"] == u_id)
         assert record["reason"] == "Updated Reason"
 
         # 5. Delete
-        response = client.delete(f"/unavailabilities/{u_id}")
+        response = client.delete(f"/api/unavailabilities/{u_id}")
         assert response.status_code == 200
         
-        response = client.get("/unavailabilities")
+        response = client.get("/api/unavailabilities")
         assert not any(r["id"] == u_id for r in response.json())
 
     def test_check_manpower(self, client, db):
@@ -320,7 +320,7 @@ class TestUnavailabilities:
         # 2. Check manpower
         start = "2025-01-01T00:00:00"
         end = "2025-01-02T00:00:00"
-        response = client.get(f"/unavailabilities/check-manpower?start_date={start}&end_date={end}")
+        response = client.get(f"/api/unavailabilities/check-manpower?start_date={start}&end_date={end}")
         assert response.status_code == 200
         data = response.json()
         assert len(data) > 0 # Should have info for at least one day
