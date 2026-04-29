@@ -353,8 +353,13 @@ class ShavtzachiDB:
 
     def reload_cache(self, force=False):
         if not self.input_sheet_id: return
+        
+        # Determine if we should bypass TTL because the cache is currently "empty" 
+        # (usually after a failed initial load or permission error)
+        is_empty = self.soldiers_df is None or len(self.soldiers_df) == 0
+        
         # Check TTL
-        if not force and self.soldiers_df is not None and (ptime.time() - self.last_reload_time) < 30:
+        if not force and not is_empty and (ptime.time() - self.last_reload_time) < 30:
             return
             
         with self.fetch_lock:
@@ -420,7 +425,8 @@ class ShavtzachiDB:
 
     # --- Skills ---
     def get_all_skills(self) -> List[Skill]:
-        if "Name" not in self.skills_df.columns: return []
+        self.reload_cache()
+        if self.skills_df.empty or "Name" not in self.skills_df.columns: return []
         return [Skill(id=i+1, name=str(row["Name"]).strip()) for i, row in self.skills_df.iterrows() if str(row.get("Name", "")).strip()]
 
     def get_skill_by_name(self, name: str) -> Optional[Skill]:
@@ -435,8 +441,7 @@ class ShavtzachiDB:
 
     # --- Soldiers ---
     def get_all_soldiers(self, include_skills=True, include_unavailabilities=False, include_excluded_posts=True, reload=False) -> List[Soldier]:
-        if reload:
-             self.reload_cache()
+        self.reload_cache(force=reload)
         soldiers = []
         if self.soldiers_df.empty or "Name" not in self.soldiers_df.columns: return soldiers
         
@@ -535,6 +540,7 @@ class ShavtzachiDB:
 
     # --- Posts ---
     def get_all_posts(self, include_slots=True) -> List[Post]:
+        self.reload_cache()
         posts = []
         if self.posts_df.empty or "Name" not in self.posts_df.columns: return posts
         
@@ -657,6 +663,7 @@ class ShavtzachiDB:
 
     # --- Unavailabilities ---
     def get_unavailabilities(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> List[Unavailability]:
+        self.reload_cache()
         unavails = []
         if self.unavailabilities_df.empty or "Soldier Name" not in self.unavailabilities_df.columns: return unavails
         for i, row in self.unavailabilities_df.iterrows():
