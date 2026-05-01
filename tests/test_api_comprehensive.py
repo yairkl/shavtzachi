@@ -240,6 +240,52 @@ class TestScheduler:
         assert len(data) == 1
         assert data[0]["soldier_name"] == "Scheduler Soldier"
 
+    def test_overlapping_save_gsheets(self, client, db, setup_data):
+        """
+        Regression test for GSheet merge conflicts.
+        Verifies that saving consecutive days succeeds even with overlapping 
+        ranges and existing merges in the sheet.
+        """
+        if not hasattr(db, 'input_sheet_id'):
+             pytest.skip("GSheets specific test")
+             
+        sol, post = setup_data
+        
+        # 1. Save Day 1
+        payload1 = {
+            "start_date": "2025-01-01T00:00:00",
+            "end_date": "2025-01-02T00:00:00",
+            "assignments": [
+                {"soldier_id": sol.id, "post_name": "Scheduler Post", "start": "2025-01-01T20:00:00", "end": "2025-01-02T00:00:00", "role_id": 0}
+            ]
+        }
+        res1 = client.post("/api/schedule/save", json=payload1)
+        assert res1.status_code == 200
+        
+        # Verify Day 1 is present
+        data1 = client.get(f"/api/schedule?start_date=2025-01-01T00:00:00&end_date=2025-01-03T00:00:00").json()
+        assert len(data1) == 1, "Day 1 assignment should be present after first save"
+        
+        # 2. Save Day 2
+        payload2 = {
+            "start_date": "2025-01-02T00:00:00",
+            "end_date": "2025-01-03T00:00:00",
+            "assignments": [
+                {"soldier_id": sol.id, "post_name": "Scheduler Post", "start": "2025-01-02T00:00:00", "end": "2025-01-02T04:00:00", "role_id": 0}
+            ]
+        }
+        res2 = client.post("/api/schedule/save", json=payload2)
+        assert res2.status_code == 200
+        
+        # 3. Verify both days are present
+        data2 = client.get(f"/api/schedule?start_date=2025-01-01T00:00:00&end_date=2025-01-03T00:00:00").json()
+        # Sort by start time for reliable assertion
+        data2.sort(key=lambda x: x['start'])
+        
+        assert len(data2) == 2, f"Expected 2 assignments, got {len(data2)}: {data2}"
+        assert data2[0]['start'].startswith("2025-01-01T20:00")
+        assert data2[1]['start'].startswith("2025-01-02T00:00")
+
     def test_export_schedule(self, client, db, setup_data):
         # 1. Setup an assignment
         sol, post = setup_data

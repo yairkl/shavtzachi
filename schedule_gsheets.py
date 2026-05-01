@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta, time
 from collections import defaultdict
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Helper to convert col number (0-indexed) to letter
 def col_letter(col):
@@ -11,7 +14,7 @@ def col_letter(col):
         letter = chr(65 + remainder) + letter
     return letter
 
-def build_schedule_requests(sheet_id, assignments, start_date, end_date):
+def build_schedule_requests(sheet_id, assignments, start_date, end_date, time_granularity_hours=1):
     """
     Builds a Timeline Layout:
     Y-axis (Col A, B): Date and Time (1 hour steps)
@@ -25,12 +28,12 @@ def build_schedule_requests(sheet_id, assignments, start_date, end_date):
     current_time = start_date.replace(minute=0, second=0, microsecond=0)
     limit_time = end_date.replace(minute=0, second=0, microsecond=0)
     if limit_time < end_date:
-        limit_time += timedelta(hours=1)
+        limit_time += timedelta(hours=time_granularity_hours)
         
     time_steps = []
     while current_time < limit_time:
         time_steps.append(current_time)
-        current_time += timedelta(hours=1)
+        current_time += timedelta(hours=time_granularity_hours)
         
     time_to_row = {t: i + 2 for i, t in enumerate(time_steps)} # Data starts at row 2
     
@@ -117,11 +120,29 @@ def build_schedule_requests(sheet_id, assignments, start_date, end_date):
                 role_name = next((a.get('role_name') for a in assignments if a['post_name'] == post_name and a['role_id'] == r_idx), f"Role {r_idx+1}")
                 set_cell(1, col, get_cell(role_name or f"Role {r_idx+1}", is_header=True))
                 
-    # --- Y-Axis ---
+    # --- Y-Axis (Date & Time) ---
+    last_date = None
+    date_start_row = 2
     for i, t in enumerate(time_steps):
         r = i + 2
-        set_cell(r, 0, get_cell(t.strftime('%d/%m/%Y')))
-        set_cell(r, 1, get_cell(t.strftime('%H:%M')))
+        curr_date = t.strftime('%d/%m/%Y')
+        set_cell(r, 0, get_cell(curr_date))
+        
+        # Time Range display
+        end_t = t + timedelta(hours=time_granularity_hours)
+        time_range_str = f"{t.strftime('%H:%M')} - {end_t.strftime('%H:%M')}"
+        set_cell(r, 1, get_cell(time_range_str))
+        
+        # Track for Date Merging
+        if last_date is not None and curr_date != last_date:
+            if r > date_start_row + 1:
+                merges.append({'sheetId': sheet_id, 'startRowIndex': date_start_row, 'endRowIndex': r, 'startColumnIndex': 0, 'endColumnIndex': 1})
+            date_start_row = r
+        last_date = curr_date
+    
+    # Last date merge
+    if len(time_steps) + 2 > date_start_row + 1:
+        merges.append({'sheetId': sheet_id, 'startRowIndex': date_start_row, 'endRowIndex': len(time_steps) + 2, 'startColumnIndex': 0, 'endColumnIndex': 1})
 
     # --- Data & Merges ---
     div_colors = [
@@ -142,7 +163,7 @@ def build_schedule_requests(sheet_id, assignments, start_date, end_date):
              pass
         elif e_dt < a['end']:
              # If end is e.g. 09:30, it occupies the 09:00 slot too
-             e_dt += timedelta(hours=1)
+             e_dt += timedelta(hours=time_granularity_hours)
         
         if s_dt not in time_to_row:
             if s_dt < time_steps[0] and e_dt > time_steps[0]:
@@ -188,12 +209,35 @@ def build_schedule_requests(sheet_id, assignments, start_date, end_date):
         }
     })
     
+    # Deduplicate merges to avoid API errors and redundancy
+    unique_merges = []
+    seen_merges = set()
     for m in merges:
+        m_tuple = (m.get('startRowIndex', 0), m.get('endRowIndex', 0), m.get('startColumnIndex', 0), m.get('endColumnIndex', 0))
+        if m_tuple not in seen_merges:
+            seen_merges.add(m_tuple)
+            unique_merges.append(m)
+            
+    for m in unique_merges:
         requests.append({'mergeCells': {'range': m, 'mergeType': 'MERGE_ALL'}})
+        
+    # Freeze headers and Date/Time columns
+    requests.append({
+        'updateSheetProperties': {
+            'properties': {
+                'sheetId': sheet_id,
+                'gridProperties': {
+                    'frozenRowCount': 2,
+                    'frozenColumnCount': 2
+                }
+            },
+            'fields': 'gridProperties(frozenRowCount,frozenColumnCount)'
+        }
+    })
         
     return requests
 
-def parse_grid(grid_rows, active_posts, base_date=None, merges=None):
+def parse_grid(grid_rows, active_posts, base_date=None, merges=None, time_granularity_hours=1):
     """
     Parses a Timeline Layout grid back into assignments.
     Uses merge metadata to accurately determine durations.
@@ -244,10 +288,16 @@ def parse_grid(grid_rows, active_posts, base_date=None, merges=None):
             
     # 2. Map Rows to Datetime
     row_to_dt = {}
+    last_d_str = None
     for r in range(2, len(grid_rows)):
-        d_str = val(r, 0)
+        d_str = val(r, 0) or last_d_str
         t_str = val(r, 1)
         if d_str and t_str:
+            last_d_str = d_str
+            # Handle time range display (e.g. "08:00 - 12:00")
+            if " - " in t_str:
+                t_str = t_str.split(" - ")[0]
+                
             try:
                 # Try common formats
                 if "/" in d_str:
@@ -278,18 +328,12 @@ def parse_grid(grid_rows, active_posts, base_date=None, merges=None):
                     else:
                         # If end_row is beyond row_to_dt, extrapolate
                         last_r = max(row_to_dt.keys())
-                        end_dt = row_to_dt[last_r] + timedelta(hours=(end_row - last_r))
+                        end_dt = row_to_dt[last_r] + timedelta(hours=(end_row - last_r) * time_granularity_hours)
                     curr_r = end_row
                 else:
-                    # Case 2: Scan for identical names in subsequent rows (fallback)
+                    # Case 2: Not merged: single row assignment
                     curr_r = r + 1
-                    while curr_r < len(grid_rows) and val(curr_r, c) == soldier_name and curr_r in row_to_dt:
-                         curr_r += 1
-                    
-                    if curr_r in row_to_dt:
-                        end_dt = row_to_dt[curr_r]
-                    else:
-                        end_dt = row_to_dt[r] + timedelta(hours=1)
+                    end_dt = row_to_dt[r] + timedelta(hours=time_granularity_hours)
                 
                 assignments.append({
                     "post_name": p_name,

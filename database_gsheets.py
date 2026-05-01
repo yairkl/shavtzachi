@@ -33,8 +33,10 @@ class ShavtzachiDB:
         self.session = self
         self.creds = None
         self.config = load_config()
-        self.input_sheet_id = input_sheet_id or self.config.get("INPUT_SPREADSHEET_ID")
+        self.spreadsheet_id = self.config.get("SPREADSHEET_ID")
+        self.input_sheet_id = input_sheet_id or self.spreadsheet_id or self.config.get("INPUT_SPREADSHEET_ID")
         self.output_sheet_id = output_sheet_id or self.config.get("OUTPUT_SPREADSHEET_ID") or self.input_sheet_id
+        self.time_granularity_hours = int(self.config.get("TIME_GRANULARITY_HOURS", 4))
         
         self.assignments_cache = {} # (key: (post_name, start_iso)) -> Assignment
         self.all_assignments_cache = None # List[Assignment] when prefetched
@@ -766,7 +768,7 @@ class ShavtzachiDB:
                     title = raw_range.split('!')[0].replace("'", "")
                     merges = merges_by_title.get(title, [])
                     
-                    parsed_dicts = parse_grid(grid_rows, all_posts, merges=merges)
+                    parsed_dicts = parse_grid(grid_rows, all_posts, merges=merges, time_granularity_hours=self.time_granularity_hours)
 
                     for p_dict in parsed_dicts:
                         post = all_posts.get(p_dict['post_name'])
@@ -853,8 +855,8 @@ class ShavtzachiDB:
         # This allows re-saving/updating a specific day without duplicates
         filtered_existing = []
         for a in existing_assignments_objs:
-            # Only clear assignments for shifts that START in the range (matches SQLite behavior)
-            if start_date <= a.shift.start < end_date:
+            # Clear assignments that OVERLAP with the range we are currently saving
+            if a.shift.start < end_date and a.shift.end > start_date:
                 continue
             filtered_existing.append(a)
             
@@ -891,7 +893,7 @@ class ShavtzachiDB:
             # Create if not exists
             res = self._gsheets_batch_update(
                 self.output_sheet_id,
-                [{'addSheet': {'properties': {'title': tab_name, 'gridProperties': {'frozenRowCount': 2}}}}]
+                [{'addSheet': {'properties': {'title': tab_name, 'gridProperties': {'frozenRowCount': 2, 'frozenColumnCount': 2}}}}]
             )
             sheet_id = res['replies'][0]['addSheet']['properties']['sheetId']
         else:
@@ -899,13 +901,16 @@ class ShavtzachiDB:
             self._gsheets_clear_values(self.output_sheet_id, f"'{tab_name}'!A:Z")
             
         # 7. Build and execute requests
-        requests = build_schedule_requests(sheet_id, combined_data, full_start, full_end)
+        requests = build_schedule_requests(sheet_id, combined_data, full_start, full_end, time_granularity_hours=self.time_granularity_hours)
         if requests:
+            # Prepend a request to clear all existing merges to avoid "overlapping merge" errors
+            requests.insert(0, {'unmergeCells': {'range': {'sheetId': sheet_id}}})
             self._gsheets_batch_update(self.output_sheet_id, requests)
             
         # Invalidate caches
         self.all_assignments_cache = None
         self.history_scores_cache = None
+        self.sheet_metadata_cache.clear()
         self.sheet_metadata_cache = {}
 
     def add_assignment(self, soldier_id: int, shift_id: str, role_id: int): 

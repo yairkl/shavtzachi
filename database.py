@@ -6,7 +6,7 @@ All other modules (main.py, schedule.py, tests) should import ShavtzachiDB
 exclusively from here.
 
 Backend selection logic:
-  - If config.json contains valid INPUT_SPREADSHEET_ID → use Google Sheets backend
+  - If config.json contains valid SPREADSHEET_ID → use Google Sheets backend
   - Otherwise → use SQLite backend
 """
 
@@ -61,7 +61,7 @@ def load_config():
 
 
 def _is_gsheets_configured(config: dict) -> bool:
-    return bool(config.get("INPUT_SPREADSHEET_ID"))
+    return bool(config.get("SPREADSHEET_ID")) or bool(config.get("INPUT_SPREADSHEET_ID"))
 
 
 def _create_db_instance():
@@ -70,7 +70,7 @@ def _create_db_instance():
         logger.info("Database backend: Google Sheets")
         from database_gsheets import ShavtzachiDB as GSheetDB
         return GSheetDB(
-            input_sheet_id=config["INPUT_SPREADSHEET_ID"],
+            input_sheet_id=config.get("SPREADSHEET_ID") or config.get("INPUT_SPREADSHEET_ID"),
             output_sheet_id=config.get("OUTPUT_SPREADSHEET_ID")
         )
     else:
