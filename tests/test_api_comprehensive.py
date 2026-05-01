@@ -193,12 +193,24 @@ class TestScheduler:
         response = client.post("/api/schedule/draft", json=payload)
         assert response.status_code == 200
         assert len(response.json()) > 0
+        # verify that each shift has exactly one assignment.
+        assignments = set()
+        for assignment in response.json():
+            if (assignment['post_name'], assignment['role_id'], assignment['start'], assignment['end']) in assignments:
+                raise ValueError("Duplicate assignment found")
+            assignments.add((assignment['post_name'], assignment['role_id'], assignment['start'], assignment['end']))
 
         # Test Greedy
         payload["algorithm"] = "greedy"
         response = client.post("/api/schedule/draft", json=payload)
         assert response.status_code == 200
         assert len(response.json()) > 0
+        # verify that each shift has exactly one assignment.
+        assignments = set()
+        for assignment in response.json():
+            if (assignment['post_name'], assignment['role_id'], assignment['start'], assignment['end']) in assignments:
+                raise ValueError("Duplicate assignment found")
+            assignments.add((assignment['post_name'], assignment['role_id'], assignment['start'], assignment['end']))
 
     def test_save_and_get_schedule(self, client, db, setup_data):
         sol, post = setup_data

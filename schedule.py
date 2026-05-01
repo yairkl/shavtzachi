@@ -766,8 +766,8 @@ def solve_shift_assignment_greedy(shifts: List[Shift], soldiers: List[Soldier],
         return max(criticality.get(slot.skill.name, 0.0) for slot in shift.post.slots)
 
     # 4. Sort Shifts
-    # Higher criticality (rarity) first, then longer shifts.
-    sorted_shifts = sorted(shifts, key=lambda s: (get_shift_rarity(s), (s.end - s.start).total_seconds()), reverse=True)
+    # Higher criticality (rarity) first, then longer shifts, then earlier shifts.
+    sorted_shifts = sorted(shifts, key=lambda s: (get_shift_rarity(s), (s.end - s.start).total_seconds(), -s.start.timestamp()), reverse=True)
 
     if shifts:
         min_start = min(s.start for s in shifts)
@@ -816,7 +816,9 @@ def solve_shift_assignment_greedy(shifts: List[Shift], soldiers: List[Soldier],
             
             if best_soldier:
                 assignment = Assignment(
+                    soldier=best_soldier,
                     soldier_id=best_soldier.id,
+                    shift=shift,
                     shift_id=shift.id,
                     role_id=role_id
                 )
@@ -833,16 +835,7 @@ def solve_shift_assignment_greedy(shifts: List[Shift], soldiers: List[Soldier],
             else:
                 logger.warning(f"Greedy Solver: Could not find any fitting soldier for {shift.post_name} at {shift.start}")
 
-    # Re-attach objects at the end so the caller has them, but safely after the loop
-    for a in results:
-        # We can find the soldier and shift objects from the inputs or just let them be lazy-loaded.
-        # But for efficiency, we can re-attach them now.
-        pass # Actually, if we don't attach them here, they will lazy load later.
-        # To be safe and helpful, we can attach them.
-        s_obj = next((s for s in soldiers if s.id == a.soldier_id), None)
-        sh_obj = next((s for s in shifts if s.id == a.shift_id), None)
-        if s_obj: a.soldier = s_obj
-        if sh_obj: a.shift = sh_obj
+    # Objects are now attached during creation above.
 
     _log_fairness_stats(results, soldiers)
     _log_rest_stats(results)
@@ -858,6 +851,7 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
     """
     score = 0
     conflicts = []
+    draft_load = 0.0
     
     # Normalize datetimes
     if shift_start.tzinfo: shift_start = shift_start.replace(tzinfo=None)
@@ -917,6 +911,9 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
                         "role_id": a["role_id"],
                         "post": a.get("post")
                     })
+                    # Add to draft load (weighted by intensity if available)
+                    intensity = a.get("post").intensity_weight if a.get("post") else 1.0
+                    draft_load += (a_end - a_start).total_seconds() / 3600 * intensity
     
     last_shift_info_obj = None 
     next_shift_info_obj = None 
@@ -977,9 +974,10 @@ def evaluate_soldier_fitness(soldier: Soldier, shift_start: datetime, shift_end:
             score -= 2000
             conflicts.append("unavailable")
             
-    # 4. Fairness (History Score) - currently commented out in original
-    # h_score = history_scores.get(soldier.id, 0.0)
-    # score -= h_score * 5 
+    # 4. Fairness (History + Draft Load)
+    h_score = history_scores.get(soldier.id, 0.0)
+    total_load = h_score + draft_load
+    score -= total_load * 5 
     
     # 5. Rest bonus
     if last_shift_info_obj:
