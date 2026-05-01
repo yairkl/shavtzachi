@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['main.py'],
+    ['desktop.py'],
     pathex=[],
     binaries=[],
     datas=[('/home/yair/vsCodeProjects/shavtzachi/frontend/dist', 'frontend/dist')],
