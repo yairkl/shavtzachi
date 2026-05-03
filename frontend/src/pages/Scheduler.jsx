@@ -251,7 +251,7 @@ export default function Scheduler() {
       ]);
       
       if (Array.isArray(shiftsRes.data)) {
-        setShifts(shiftsRes.data);
+        setShifts(shiftsRes.data.map(s => ({ ...s, persisted: s.soldier_id != null })));
       } else {
         console.error("fetchDaySlots: received non-array shifts data", shiftsRes.data);
         setShifts([]);
@@ -360,7 +360,14 @@ export default function Scheduler() {
         const key = `${slot.post_name}|${slot.start}|${slot.role_id}`;
         const solved = solverLookup[key];
         if (solved) {
-          return { ...slot, soldier_id: solved.soldier_id, soldier_name: solved.soldier_name };
+          // If the assignment is different from current, it's NOT persisted
+          const isSame = slot.soldier_id === solved.soldier_id;
+          return { 
+            ...slot, 
+            soldier_id: solved.soldier_id, 
+            soldier_name: solved.soldier_name,
+            persisted: slot.persisted && isSame
+          };
         }
         return slot;
       }));
@@ -388,6 +395,7 @@ export default function Scheduler() {
       }));
 
       await saveSchedule(start, endStr, payload);
+      setShifts(prev => prev.map(s => ({ ...s, persisted: s.soldier_id != null })));
       setIsDraft(false);
     } catch (error) {
       console.error("Error saving:", error);
@@ -452,7 +460,7 @@ export default function Scheduler() {
         if (data.sourceIndex !== undefined && data.sourceIndex !== slotIndex) {
           newShifts[data.sourceIndex] = { ...newShifts[data.sourceIndex], soldier_id: null, soldier_name: null };
         }
-        newShifts[slotIndex] = { ...newShifts[slotIndex], soldier_id: data.soldier_id, soldier_name: data.soldier_name };
+        newShifts[slotIndex] = { ...newShifts[slotIndex], soldier_id: data.soldier_id, soldier_name: data.soldier_name, persisted: false };
         return newShifts;
       });
       setIsDraft(true);
@@ -479,7 +487,7 @@ export default function Scheduler() {
     if (selectedShiftIndex === null) return;
     setShifts(prev => {
       const newShifts = [...prev];
-      newShifts[selectedShiftIndex] = { ...newShifts[selectedShiftIndex], soldier_id: soldier.id, soldier_name: soldier.name };
+      newShifts[selectedShiftIndex] = { ...newShifts[selectedShiftIndex], soldier_id: soldier.id, soldier_name: soldier.name, persisted: false };
       return newShifts;
     });
     setIsDraft(true);
@@ -827,7 +835,7 @@ export default function Scheduler() {
                                    ? "bg-slate-800/60 border border-slate-700 text-slate-400 cursor-not-allowed"
                                    : hasWarning
                                      ? "bg-red-500/20 border border-red-500/60 hover:bg-red-500/30 text-red-100 shadow-red-900/30 ring-1 ring-red-500/30 cursor-grab active:cursor-grabbing hover:scale-[1.02] hover:z-10"
-                                     : isDraft
+                                     : !shift.persisted
                                        ? "bg-amber-500/20 border border-amber-500/50 hover:bg-amber-500/30 text-amber-200 shadow-amber-900/20 cursor-grab active:cursor-grabbing hover:scale-[1.02] hover:z-10"
                                        : "bg-indigo-500/20 border border-indigo-500/50 hover:bg-indigo-500/30 text-indigo-100 shadow-indigo-900/20 cursor-grab active:cursor-grabbing hover:scale-[1.02] hover:z-10",
                                  styleInfo.clippedStart && "rounded-l-none border-l-0",
