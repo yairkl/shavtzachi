@@ -8,16 +8,17 @@ import Scheduler from './pages/Scheduler';
 import Unavailability from './pages/Unavailability';
 import Login from './pages/Login';
 
+import { getAuthStatus } from './services/api';
+
 function App() {
   const [authStatus, setAuthStatus] = useState({ authenticated: null, backend: null });
   const [loading, setLoading] = useState(true);
 
 
   useEffect(() => {
-    fetch('/api/auth/status')
-      .then(res => res.json())
-      .then(data => {
-        setAuthStatus(data);
+    getAuthStatus()
+      .then(res => {
+        setAuthStatus(res.data);
         setLoading(false);
       })
       .catch(err => {

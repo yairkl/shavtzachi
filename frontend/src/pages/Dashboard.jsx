@@ -86,7 +86,7 @@ export default function Dashboard() {
               <div key={s.id} className="space-y-2">
                 <div className="flex justify-between text-sm items-center">
                   <span className="font-semibold">{s.name}</span>
-                  <span className="font-mono text-muted-foreground">{s.history_score.toFixed(1)} pts</span>
+                  <span className="font-mono text-muted-foreground">{(s.history_score || 0).toFixed(1)} pts</span>
                 </div>
                 <div className="h-3 w-full bg-muted/30 rounded-full overflow-hidden border border-white/5">
                   <div 
