@@ -16,13 +16,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 const ConflictTooltip = ({ icon: Icon, color, message, warnings }) => {
   const [open, setOpen] = useState(false);
@@ -230,7 +223,6 @@ export default function Scheduler() {
   const [dragOverSlotKey, setDragOverSlotKey] = useState(null);
   const [soldierFilter, setSoldierFilter] = useState('');
   const [skillFilter, setSkillFilter] = useState(''); // Filter by skill/role
-  const [assignmentAlgorithm, setAssignmentAlgorithm] = useState('optimal');
 
   // Reassignment dialog (fallback)
   const [selectedShift, setSelectedShift] = useState(null);
@@ -356,7 +348,7 @@ export default function Scheduler() {
         await saveSchedule(start, endStr, payload);
       }
 
-      const { data } = await draftSchedule(start, endStr, assignmentAlgorithm);
+      const { data } = await draftSchedule(start, endStr, 'greedy');
       
       const solverLookup = {};
       for (const a of data) {
@@ -649,36 +641,11 @@ export default function Scheduler() {
              </Button>
           </div>
           
-          <div className="flex items-center gap-1 bg-slate-900/40 backdrop-blur-xl p-0.5 rounded-full border border-white/10 ring-1 ring-white/5">
-             <Select value={assignmentAlgorithm} onValueChange={setAssignmentAlgorithm}>
-               <SelectTrigger className="h-8 w-[180px] text-[11px] bg-transparent border-none focus:ring-0 focus:ring-offset-0 hover:bg-white/5 rounded-full px-4 transition-colors">
-                 <div className="flex items-center gap-2 text-slate-300">
-                   <div className="w-1 h-1 rounded-full bg-indigo-500" />
-                   <SelectValue placeholder="Algorithm" />
-                 </div>
-               </SelectTrigger>
-               <SelectContent className="bg-slate-900/95 border-white/10 backdrop-blur-xl w-[320px]">
-                 <SelectItem value="optimal" className="text-xs focus:bg-indigo-500/20 focus:text-indigo-200 cursor-pointer py-2">
-                   <div className="flex flex-col gap-0.5">
-                     <span className="font-bold">Balanced Distribution</span>
-                     <span className="text-[10px] opacity-50">Fair workload & rest maximization</span>
-                   </div>
-                 </SelectItem>
-                 <SelectItem value="greedy" className="text-xs focus:bg-indigo-500/20 focus:text-indigo-200 cursor-pointer py-2">
-                   <div className="flex flex-col gap-0.5">
-                     <span className="font-bold">Fast Assignment</span>
-                     <span className="text-[10px] opacity-50">Heuristic-based greedy allocation</span>
-                   </div>
-                 </SelectItem>
-               </SelectContent>
-             </Select>
-             
-             <div className="w-[1px] h-3 bg-white/10 mx-0.5" />
-
+          <div className="flex items-center gap-1 bg-slate-900/40 backdrop-blur-xl p-1 rounded-full border border-white/10 ring-1 ring-white/5">
              <Button 
                onClick={handleDraft} 
                disabled={loading} 
-               className="h-8 px-4 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] gap-1.5 shadow-lg shadow-indigo-500/20 active:scale-95 shrink-0"
+               className="h-8 px-6 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] gap-1.5 shadow-lg shadow-indigo-500/20 active:scale-95 shrink-0"
              >
                <Wand2 className={cn("w-3 h-3 transition-transform", loading && "animate-spin")} /> 
                <span>Auto Assign</span>
