@@ -51,14 +51,12 @@ export default function Login({ authStatus, authError }) {
       </div>
 
       {/* Card */}
-      <div className="relative z-10 flex flex-col items-center gap-8 px-10 py-12 rounded-2xl"
+      <div className="relative z-10 flex flex-col items-center gap-8 px-6 md:px-10 py-12 rounded-2xl w-full max-w-[90%] sm:max-w-[440px]"
            style={{
              background: 'rgba(26, 31, 46, 0.6)',
              backdropFilter: 'blur(20px)',
              border: '1px solid hsl(216, 34%, 17%)',
              boxShadow: '0 32px 80px rgba(0,0,0,0.5)',
-             minWidth: 380,
-             maxWidth: 440,
            }}>
 
         {/* Icon */}

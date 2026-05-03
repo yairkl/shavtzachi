@@ -32,11 +32,11 @@ export default function Dashboard() {
   }, []);
 
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-      <div className="flex justify-between items-end">
+    <div className="space-y-6 md:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
         <div>
-          <h2 className="text-4xl font-extrabold tracking-tight text-white">Shavtzachi Central</h2>
-          <p className="text-muted-foreground text-lg mt-2">Operational readiness and workload distribution overview.</p>
+          <h2 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white">Shavtzachi Central</h2>
+          <p className="text-muted-foreground text-base md:text-lg mt-1 md:mt-2">Operational readiness and workload distribution overview.</p>
         </div>
       </div>
 

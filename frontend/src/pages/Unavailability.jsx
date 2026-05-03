@@ -269,86 +269,209 @@ export default function Unavailability() {
   };
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-700 h-[calc(100vh-120px)] flex flex-col">
-      <div className="flex justify-between items-center shrink-0">
+    <div className="space-y-6 md:space-y-8 animate-in fade-in duration-700 h-[calc(100vh-120px)] md:h-[calc(100vh-120px)] flex flex-col">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center shrink-0 gap-6">
         <div>
-          <h2 className="text-4xl font-extrabold tracking-tight text-white flex items-center gap-3"><CalendarDays className="w-10 h-10 text-primary" />Attendance & Readiness</h2>
-          <p className="text-muted-foreground text-sm mt-1">Manage personnel availability and sustainability metrics.</p>
+          <h2 className="text-2xl md:text-4xl font-extrabold tracking-tight text-white flex items-center gap-3">
+            <CalendarDays className="w-8 h-8 md:w-10 md:h-10 text-primary" />
+            <span className="hidden sm:inline">Attendance & Readiness</span>
+            <span className="sm:hidden">Attendance</span>
+          </h2>
+          <p className="text-muted-foreground text-xs md:text-sm mt-1">Manage personnel availability and sustainability metrics.</p>
         </div>
-        <div className="flex gap-4">
-          <div className="flex items-center gap-1 bg-card/60 backdrop-blur pb-0 p-1 rounded-xl border border-white/10 shadow-lg">
-             <Button variant={activeTab === 'registry' ? 'secondary' : 'ghost'} size="sm" onClick={() => setActiveTab('registry')} className="gap-2 rounded-lg py-5 px-4 font-bold"><LayoutDashboard className="w-4 h-4" /> Personnel Registry</Button>
-             <Button variant={activeTab === 'sustainability' ? 'secondary' : 'ghost'} size="sm" onClick={() => setActiveTab('sustainability')} className="gap-2 rounded-lg py-5 px-4 font-bold"><BarChart3 className="w-4 h-4" /> Sustainability</Button>
+        <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+          <div className="flex items-center gap-1 bg-card/60 backdrop-blur p-1 rounded-xl border border-white/10 shadow-lg flex-1">
+             <Button variant={activeTab === 'registry' ? 'secondary' : 'ghost'} size="sm" onClick={() => setActiveTab('registry')} className="gap-2 rounded-lg py-4 md:py-5 px-3 md:px-4 font-bold flex-1 text-xs md:text-sm">
+               <LayoutDashboard className="w-3.5 h-3.5 md:w-4 md:h-4" /> <span className="hidden lg:inline">Personnel Registry</span>
+               <span className="lg:hidden">Registry</span>
+             </Button>
+             <Button variant={activeTab === 'sustainability' ? 'secondary' : 'ghost'} size="sm" onClick={() => setActiveTab('sustainability')} className="gap-2 rounded-lg py-4 md:py-5 px-3 md:px-4 font-bold flex-1 text-xs md:text-sm">
+               <BarChart3 className="w-3.5 h-3.5 md:w-4 md:h-4" /> <span className="hidden lg:inline">Sustainability</span>
+               <span className="lg:hidden">Sustainability</span>
+             </Button>
           </div>
-          <Button size="lg" className="gap-2 shadow-lg shadow-primary/20 bg-primary hover:bg-primary/90" onClick={() => handleOpenCreate()}><Plus className="w-5 h-5 font-black" /> Authorize Absence</Button>
+          <Button size="lg" className="gap-2 shadow-lg shadow-primary/20 bg-primary hover:bg-primary/90 py-4 md:py-6 text-xs md:text-sm" onClick={() => handleOpenCreate()}>
+            <Plus className="w-4 h-4 md:w-5 md:h-5 font-black" /> <span className="hidden sm:inline">Authorize Absence</span>
+            <span className="sm:hidden">Authorize</span>
+          </Button>
         </div>
       </div>
 
       {activeTab === 'registry' ? (
         <>
           <Card className="glass border-none shadow-xl bg-card/20 p-3 shrink-0">
-            <div className="flex flex-wrap gap-4 items-center">
-              <div className="relative flex-1 min-w-[200px]"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" /><Input placeholder="Identify Personnel..." className="pl-10 bg-background/50 border-white/5 h-9 text-xs" value={searchTerm} onChange={e => setSearchTerm(e.target.value)}/></div>
-              <div className="flex items-center gap-2"><Select value={skillFilter} onValueChange={setSkillFilter}><SelectTrigger className="w-[160px] bg-background/30 border-white/5 text-[10px] h-9 font-bold"><SelectValue placeholder="Skillsets" /></SelectTrigger><SelectContent className="bg-zinc-900 border-white/10 text-white max-h-72 overflow-y-auto"><SelectItem value="all">Every Qualification</SelectItem>{availableSkills.map(s => (<SelectItem key={s} value={s}>{s}</SelectItem>))}</SelectContent></Select></div>
-              <div className="flex items-center gap-2 bg-background/20 rounded-lg p-0.5 border border-white/5"><Button variant={viewMode === 'table' ? 'secondary' : 'ghost'} size="icon" onClick={() => setViewMode('table')} className="h-8 w-8 rounded-md"><List className="w-4 h-4" /></Button><Button variant={viewMode === 'timeline' ? 'secondary' : 'ghost'} size="icon" onClick={() => setViewMode('timeline')} className="h-8 w-8 rounded-md"><GanttChartSquare className="w-4 h-4" /></Button></div>
-              {viewMode === 'timeline' && (<div className="flex items-center gap-2 bg-background/20 rounded-lg p-0.5 border border-white/5"><Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setTimelineStart(d => addDays(d, -7))}><ChevronLeft className="w-4 h-4" /></Button><span className="text-[10px] font-black uppercase px-2 tracking-tighter w-24 text-center">{format(timelineStart, 'MMM dd')} - {format(addDays(timelineStart, 13), 'MMM dd')}</span><Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setTimelineStart(d => addDays(d, 7))}><ChevronRight className="w-4 h-4" /></Button></div>)}
+            <div className="flex flex-wrap gap-3 items-center">
+              <div className="relative flex-1 min-w-[180px]">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                <Input placeholder="Identify Personnel..." className="pl-9 bg-background/50 border-white/5 h-9 text-xs" value={searchTerm} onChange={e => setSearchTerm(e.target.value)}/>
+              </div>
+              <div className="flex items-center gap-2">
+                <Select value={skillFilter} onValueChange={setSkillFilter}>
+                  <SelectTrigger className="w-[140px] md:w-[160px] bg-background/30 border-white/5 text-[10px] h-9 font-bold">
+                    <SelectValue placeholder="Skillsets" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-zinc-900 border-white/10 text-white max-h-72 overflow-y-auto">
+                    <SelectItem value="all">Every Qualification</SelectItem>
+                    {availableSkills.map(s => (<SelectItem key={s} value={s}>{s}</SelectItem>))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center gap-2 bg-background/20 rounded-lg p-0.5 border border-white/5">
+                <Button variant={viewMode === 'table' ? 'secondary' : 'ghost'} size="icon" onClick={() => setViewMode('table')} className="h-8 w-8 rounded-md"><List className="w-4 h-4" /></Button>
+                <Button variant={viewMode === 'timeline' ? 'secondary' : 'ghost'} size="icon" onClick={() => setViewMode('timeline')} className="h-8 w-8 rounded-md"><GanttChartSquare className="w-4 h-4" /></Button>
+              </div>
+              {viewMode === 'timeline' && (
+                <div className="flex items-center gap-2 bg-background/20 rounded-lg p-0.5 border border-white/5 ml-auto md:ml-0">
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setTimelineStart(d => addDays(d, -7))}><ChevronLeft className="w-4 h-4" /></Button>
+                  <span className="text-[10px] font-black uppercase px-2 tracking-tighter min-w-[80px] text-center">{format(timelineStart, 'MMM dd')} - {format(addDays(timelineStart, 13), 'MMM dd')}</span>
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setTimelineStart(d => addDays(d, 7))}><ChevronRight className="w-4 h-4" /></Button>
+                </div>
+              )}
             </div>
           </Card>
           <div className="flex-1 overflow-hidden">
             {viewMode === 'table' ? (
-              <Card className="glass border-none shadow-2xl h-full flex flex-col"><div className="flex-1 overflow-auto custom-scrollbar"><Table className="relative"><TableHeader className="bg-muted/30 text-[10px] uppercase tracking-widest font-black sticky top-0 z-10 backdrop-blur-md"><TableRow className="hover:bg-transparent border-white/5 h-12"><TableHead className="pl-6 w-[250px]">Personnel Unit</TableHead><TableHead>Current/Upcoming Absences</TableHead><TableHead className="text-right pr-6 w-[120px]">Actions</TableHead></TableRow></TableHeader><TableBody>{loading ? (<TableRow><TableCell colSpan={3} className="text-center py-24 animate-pulse text-muted-foreground italic">Synchronizing Operational Pool...</TableCell></TableRow>) : filteredSoldiers.map((soldier) => {
+              <Card className="glass border-none shadow-2xl h-full flex flex-col overflow-hidden">
+                <div className="flex-1 overflow-auto custom-scrollbar">
+                  <Table className="relative min-w-[600px]">
+                    <TableHeader className="bg-muted/30 text-[10px] uppercase tracking-widest font-black sticky top-0 z-10 backdrop-blur-md">
+                      <TableRow className="hover:bg-transparent border-white/5 h-12">
+                        <TableHead className="pl-6 w-[200px] md:w-[250px]">Personnel Unit</TableHead>
+                        <TableHead>Current/Upcoming Absences</TableHead>
+                        <TableHead className="text-right pr-6 w-[120px]">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {loading ? (
+                        <TableRow><TableCell colSpan={3} className="text-center py-24 animate-pulse text-muted-foreground italic">Synchronizing Operational Pool...</TableCell></TableRow>
+                      ) : filteredSoldiers.map((soldier) => {
                         const soldierAbsences = records.filter(r => r.soldier_id === soldier.id);
-                        return (<TableRow key={soldier.id} className="hover:bg-white/5 transition-all border-white/5 group"><TableCell className="pl-6 py-5"><div className="flex items-center gap-4"><div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-primary font-black text-sm border border-primary/20 shadow-inner">{soldier.name.charAt(0)}</div><div className="flex flex-col"><span className="font-bold text-sm tracking-tight">{soldier.name}</span><div className="flex gap-1 mt-1">{soldier.skills.slice(0, 2).map(sk => <Badge key={sk} variant="outline" className="text-[8px] py-0 font-medium border-white/10 uppercase">{sk}</Badge>)}</div></div></div></TableCell><TableCell><div className="flex flex-wrap gap-2">{soldierAbsences.length === 0 ? <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-400 border-none text-[9px] font-black tracking-widest uppercase">Operational</Badge> : soldierAbsences.map(r => (<Badge key={r.id} className="bg-destructive/10 text-destructive border-destructive/20 text-[10px] py-1 px-3 cursor-pointer hover:bg-destructive/20 transition-colors gap-2 font-bold" onClick={() => handleOpenEdit(r)}><Clock className="w-3 h-3" />{format(new Date(r.start_datetime), "MMM d")} - {format(new Date(r.end_datetime), "MMM d")}</Badge>)) }</div></TableCell><TableCell className="text-right pr-6"><Button variant="outline" size="sm" className="opacity-0 group-hover:opacity-100 transition-all text-[10px] font-bold h-8 border-white/10 hover:bg-primary/10 hover:border-primary/50" onClick={() => handleOpenCreate({ soldier_id: soldier.id })}>Log Absence</Button></TableCell></TableRow>);
-                      })}</TableBody></Table></div></Card>
+                        return (
+                          <TableRow key={soldier.id} className="hover:bg-white/5 transition-all border-white/5 group">
+                            <TableCell className="pl-6 py-4 md:py-5">
+                              <div className="flex items-center gap-3 md:gap-4">
+                                <div className="w-8 h-8 md:w-10 md:h-10 rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-primary font-black text-xs md:text-sm border border-primary/20 shadow-inner">
+                                  {soldier.name.charAt(0)}
+                                </div>
+                                <div className="flex flex-col">
+                                  <span className="font-bold text-xs md:text-sm tracking-tight">{soldier.name}</span>
+                                  <div className="flex gap-1 mt-1">
+                                    {soldier.skills.slice(0, 2).map(sk => <Badge key={sk} variant="outline" className="text-[7px] md:text-[8px] py-0 font-medium border-white/10 uppercase">{sk}</Badge>)}
+                                  </div>
+                                </div>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex flex-wrap gap-2">
+                                {soldierAbsences.length === 0 ? (
+                                  <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-400 border-none text-[8px] md:text-[9px] font-black tracking-widest uppercase">Operational</Badge>
+                                ) : soldierAbsences.map(r => (
+                                  <Badge key={r.id} className="bg-destructive/10 text-destructive border-destructive/20 text-[9px] md:text-[10px] py-1 px-2 md:px-3 cursor-pointer hover:bg-destructive/20 transition-colors gap-2 font-bold" onClick={() => handleOpenEdit(r)}>
+                                    <Clock className="w-3 h-3" />{format(new Date(r.start_datetime), "MMM d")} - {format(new Date(r.end_datetime), "MMM d")}
+                                  </Badge>
+                                ))}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right pr-6">
+                              <Button variant="outline" size="sm" className="md:opacity-0 md:group-hover:opacity-100 transition-all text-[9px] md:text-[10px] font-bold h-8 border-white/10 hover:bg-primary/10 hover:border-primary/50" onClick={() => handleOpenCreate({ soldier_id: soldier.id })}>
+                                <span className="hidden sm:inline">Log Absence</span>
+                                <span className="sm:hidden">Log</span>
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </Card>
             ) : (
-              <Card className="glass border-none shadow-2xl h-full flex flex-col overflow-hidden"><div className="flex-1 overflow-auto custom-scrollbar"><div className="min-w-[1200px] w-full mt-1"><div className="flex sticky top-0 z-30 bg-background/95 backdrop-blur-md border-b border-white/10"><div className="w-56 shrink-0 sticky left-0 z-40 bg-background/95 backdrop-blur-lg border-r border-white/10 p-5 font-black text-[10px] uppercase tracking-widest text-muted-foreground shadow-[4px_0_15px_rgba(0,0,0,0.3)]">Personnel Resource</div><div className="flex-1 flex overflow-hidden">{timelineDays.map(day => (<div key={day.toISOString()} className={cn("flex-1 flex flex-col items-center justify-center py-3 border-r border-white/5 text-[10px] font-bold min-w-0", format(day, 'E') === 'Sat' || format(day, 'E') === 'Fri' ? "bg-white/5 text-amber-400" : "text-white/60")}><span>{format(day, 'MMM dd')}</span><span className="opacity-40 font-black">{format(day, 'EEE')}</span></div>))}</div></div><div className="relative"><div className="absolute inset-x-0 top-0 bottom-0 pl-56 flex pointer-events-none z-0">{timelineDays.map(day => (<div key={day.toISOString()} className="flex-1 border-r border-white/5 h-full"></div>))}</div>{filteredSoldiers.map(soldier => {
-                         const soldierAbsences = records.filter(r => r.soldier_id === soldier.id);
-                         return (<div key={soldier.id} className="flex border-b border-white/5 hover:bg-white/[0.03] transition-colors h-16 relative group cursor-crosshair" onClick={(e) => handleTimelineClick(soldier.id, e)}><div className="w-56 shrink-0 sticky left-0 z-20 bg-card/90 backdrop-blur-md border-r border-white/10 p-4 flex items-center shadow-[4px_0_15px_rgba(0,0,0,0.2)] group-hover:bg-card transition-colors shrink-0"><div className="flex items-center gap-3 truncate"><div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center text-xs font-black border border-white/10">{soldier.name.charAt(0)}</div><div className="flex flex-col truncate"><span className="text-xs font-bold truncate tracking-tight">{soldier.name}</span><span className="text-[8px] text-muted-foreground uppercase font-black">{soldier.skills[0] || 'no role'}</span></div></div></div><div className="flex-1 relative mx-0.5 z-10 pointer-events-none">{soldierAbsences.map(r => {
-                                 const style = calculateGanttStyle(r.start_datetime, r.end_datetime);
-                                 if (!style) return null;
-                                 return (<div key={r.id} style={{ left: style.left, width: style.width }} onClick={(e) => { e.stopPropagation(); handleOpenEdit(r); }} className={cn("absolute top-2 bottom-2 bg-primary/20 border border-primary/50 rounded-lg p-2 flex flex-col justify-center gap-1 group/item cursor-pointer pointer-events-auto transition-all hover:bg-primary/30 hover:shadow-[0_0_20px_rgba(var(--primary-rgb),0.3)] hover:scale-[1.01] hover:z-20 gantt-bar overflow-hidden shadow-2xl shadow-black/50 font-bold", style.clippedStart && "rounded-l-none border-l-0", style.clippedEnd && "rounded-r-none border-r-0")}><div className="text-[9px] font-black text-primary-foreground/90 uppercase truncate tracking-tight text-center">{r.reason}</div></div>);
-                               })}<div className="absolute inset-0 opacity-0 group-hover:opacity-100 bg-primary/5 transition-opacity" /></div></div>)
-                      })}</div></div></div></Card>
+              <Card className="glass border-none shadow-2xl h-full flex flex-col overflow-hidden">
+                <div className="flex-1 overflow-auto custom-scrollbar">
+                  <div className="min-w-[800px] md:min-w-[1200px] w-full mt-1">
+                    <div className="flex sticky top-0 z-30 bg-background/95 backdrop-blur-md border-b border-white/10">
+                      <div className="w-32 md:w-56 shrink-0 sticky left-0 z-40 bg-background/95 backdrop-blur-lg border-r border-white/10 p-3 md:p-5 font-black text-[9px] md:text-[10px] uppercase tracking-widest text-muted-foreground shadow-[4px_0_15px_rgba(0,0,0,0.3)]">Personnel Resource</div>
+                      <div className="flex-1 flex overflow-hidden">
+                        {timelineDays.map(day => (
+                          <div key={day.toISOString()} className={cn("flex-1 flex flex-col items-center justify-center py-2 md:py-3 border-r border-white/5 text-[9px] md:text-[10px] font-bold min-w-0", format(day, 'E') === 'Sat' || format(day, 'E') === 'Fri' ? "bg-white/5 text-amber-400" : "text-white/60")}>
+                            <span>{format(day, 'MMM dd')}</span>
+                            <span className="opacity-40 font-black">{format(day, 'EEE')}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="relative">
+                      <div className="absolute inset-x-0 top-0 bottom-0 pl-32 md:pl-56 flex pointer-events-none z-0">
+                        {timelineDays.map(day => (<div key={day.toISOString()} className="flex-1 border-r border-white/5 h-full"></div>))}
+                      </div>
+                      {filteredSoldiers.map(soldier => {
+                        const soldierAbsences = records.filter(r => r.soldier_id === soldier.id);
+                        return (
+                          <div key={soldier.id} className="flex border-b border-white/5 hover:bg-white/[0.03] transition-colors h-14 md:h-16 relative group cursor-crosshair" onClick={(e) => handleTimelineClick(soldier.id, e)}>
+                            <div className="w-32 md:w-56 shrink-0 sticky left-0 z-20 bg-card/90 backdrop-blur-md border-r border-white/10 p-2 md:p-4 flex items-center shadow-[4px_0_15px_rgba(0,0,0,0.2)] group-hover:bg-card transition-colors">
+                              <div className="flex items-center gap-2 md:gap-3 truncate">
+                                <div className="w-6 h-6 md:w-8 md:h-8 rounded-lg bg-white/5 flex items-center justify-center text-[10px] md:text-xs font-black border border-white/10">{soldier.name.charAt(0)}</div>
+                                <div className="flex flex-col truncate">
+                                  <span className="text-[10px] md:text-xs font-bold truncate tracking-tight">{soldier.name}</span>
+                                  <span className="text-[7px] md:text-[8px] text-muted-foreground uppercase font-black">{soldier.skills[0] || 'no role'}</span>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex-1 relative mx-0.5 z-10 pointer-events-none">
+                              {soldierAbsences.map(r => {
+                                const style = calculateGanttStyle(r.start_datetime, r.end_datetime);
+                                if (!style) return null;
+                                return (<div key={r.id} style={{ left: style.left, width: style.width }} onClick={(e) => { e.stopPropagation(); handleOpenEdit(r); }} className={cn("absolute top-1.5 bottom-1.5 md:top-2 md:bottom-2 bg-primary/20 border border-primary/50 rounded-lg p-1 md:p-2 flex flex-col justify-center gap-1 group/item cursor-pointer pointer-events-auto transition-all hover:bg-primary/30 hover:shadow-[0_0_20px_rgba(var(--primary-rgb),0.3)] hover:scale-[1.01] hover:z-20 gantt-bar overflow-hidden shadow-2xl shadow-black/50 font-bold", style.clippedStart && "rounded-l-none border-l-0", style.clippedEnd && "rounded-r-none border-r-0")}><div className="text-[8px] md:text-[9px] font-black text-primary-foreground/90 uppercase truncate tracking-tight text-center">{r.reason}</div></div>);
+                              })}
+                              <div className="absolute inset-0 opacity-0 group-hover:opacity-100 bg-primary/5 transition-opacity" />
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </Card>
             )}
           </div>
         </>
       ) : (
         <div className="flex-1 overflow-hidden flex flex-col gap-6 animate-in slide-in-from-bottom-4 duration-500">
-          <Card className="glass border-none shadow-xl bg-card/20 p-4 shrink-0">
-             <div className="flex items-center justify-between gap-8">
-                <div className="flex items-center gap-4 shrink-0">
-                   <div className="p-2.5 bg-primary/10 rounded-xl border border-primary/20">
-                      <ShieldCheck className="w-5 h-5 text-primary"/>
+          <Card className="glass border-none shadow-xl bg-card/20 p-3 md:p-4 shrink-0">
+             <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 lg:gap-8">
+                <div className="flex items-center gap-3 md:gap-4 shrink-0">
+                   <div className="p-2 md:p-2.5 bg-primary/10 rounded-xl border border-primary/20">
+                      <ShieldCheck className="w-4 h-4 md:w-5 md:h-5 text-primary"/>
                    </div>
                    <div>
-                      <h3 className="text-sm font-bold">Simulation Controls</h3>
-                      <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest">Two-week synchronization</p>
+                      <h3 className="text-xs md:text-sm font-bold">Simulation Controls</h3>
+                      <p className="text-[8px] md:text-[10px] text-muted-foreground uppercase font-black tracking-widest">Two-week synchronization</p>
                    </div>
                 </div>
 
                 {/* Timeline Navigation */}
-                <div className="flex items-center gap-4 bg-background/40 p-2 rounded-2xl border border-white/5 shadow-inner">
-                   <Button variant="ghost" size="icon" className="h-10 w-10 text-primary hover:bg-primary/10 rounded-xl" onClick={() => setTimelineStart(d => addDays(d, -7))}>
-                      <ChevronLeft className="w-5 h-5" />
+                <div className="flex items-center gap-2 md:gap-4 bg-background/40 p-1.5 md:p-2 rounded-2xl border border-white/5 shadow-inner w-full lg:w-auto justify-between lg:justify-start">
+                   <Button variant="ghost" size="icon" className="h-8 w-8 md:h-10 md:w-10 text-primary hover:bg-primary/10 rounded-xl" onClick={() => setTimelineStart(d => addDays(d, -7))}>
+                      <ChevronLeft className="w-4 h-4 md:w-5 md:h-5" />
                    </Button>
-                   <div className="flex flex-col items-center min-w-[140px]">
-                      <span className="text-[10px] font-black uppercase tracking-[2px] text-muted-foreground mb-1">Evaluation Period</span>
-                      <span className="text-xs font-bold text-white">{format(timelineStart, 'MMM dd')} — {format(addDays(timelineStart, 13), 'MMM dd')}</span>
+                   <div className="flex flex-col items-center min-w-[100px] md:min-w-[140px]">
+                      <span className="text-[8px] md:text-[10px] font-black uppercase tracking-[1px] md:tracking-[2px] text-muted-foreground mb-0.5 md:mb-1">Evaluation Period</span>
+                      <span className="text-[10px] md:text-xs font-bold text-white whitespace-nowrap">{format(timelineStart, 'MMM dd')} — {format(addDays(timelineStart, 13), 'MMM dd')}</span>
                    </div>
-                   <Button variant="ghost" size="icon" className="h-10 w-10 text-primary hover:bg-primary/10 rounded-xl" onClick={() => setTimelineStart(d => addDays(d, 7))}>
-                      <ChevronRight className="w-5 h-5" />
+                   <Button variant="ghost" size="icon" className="h-8 w-8 md:h-10 md:w-10 text-primary hover:bg-primary/10 rounded-xl" onClick={() => setTimelineStart(d => addDays(d, 7))}>
+                      <ChevronRight className="w-4 h-4 md:w-5 md:h-5" />
                    </Button>
                 </div>
 
                 {/* Time Inputs */}
-                <div className="flex-1 flex gap-4 max-w-sm">
+                <div className="w-full lg:w-auto flex gap-3 md:gap-4 max-w-sm">
                    <div className="flex-1 space-y-1">
-                      <Label className="text-[9px] font-black uppercase tracking-widest opacity-40 flex items-center gap-1.5"><Clock className="w-3 h-3" /> Activation</Label>
-                      <Input type="time" value={st} onChange={(e) => setSt(e.target.value)} className="bg-white/5 border-white/10 h-10 rounded-xl font-bold text-center" />
+                      <Label className="text-[8px] md:text-[9px] font-black uppercase tracking-widest opacity-40 flex items-center gap-1.5"><Clock className="w-3 h-3" /> Activation</Label>
+                      <Input type="time" value={st} onChange={(e) => setSt(e.target.value)} className="bg-white/5 border-white/10 h-8 md:h-10 rounded-xl font-bold text-center text-xs" />
                    </div>
                    <div className="flex-1 space-y-1">
-                      <Label className="text-[9px] font-black uppercase tracking-widest opacity-40 flex items-center gap-1.5"><Clock className="w-3 h-3" /> Release</Label>
-                      <Input type="time" value={et} onChange={(e) => setEt(e.target.value)} className="bg-white/5 border-white/10 h-10 rounded-xl font-bold text-center" />
+                      <Label className="text-[8px] md:text-[9px] font-black uppercase tracking-widest opacity-40 flex items-center gap-1.5"><Clock className="w-3 h-3" /> Release</Label>
+                      <Input type="time" value={et} onChange={(e) => setEt(e.target.value)} className="bg-white/5 border-white/10 h-8 md:h-10 rounded-xl font-bold text-center text-xs" />
                    </div>
                 </div>
              </div>
@@ -359,7 +482,7 @@ export default function Unavailability() {
               <div className="min-w-full w-fit">
                 {/* Header Row */}
                 <div className="flex sticky top-0 z-30 bg-background/95 backdrop-blur-md border-b border-white/10">
-                  <div className="w-56 shrink-0 sticky left-0 z-40 bg-background/95 backdrop-blur-lg border-r border-white/10 p-5 font-black text-[10px] uppercase tracking-widest text-muted-foreground shadow-[4px_0_15px_rgba(0,0,0,0.3)]">
+                  <div className="w-32 md:w-56 shrink-0 sticky left-0 z-40 bg-background/95 backdrop-blur-lg border-r border-white/10 p-3 md:p-5 font-black text-[9px] md:text-[10px] uppercase tracking-widest text-muted-foreground shadow-[4px_0_15px_rgba(0,0,0,0.3)]">
                     Qualification Metric
                   </div>
                   <div className="flex">
@@ -375,12 +498,12 @@ export default function Unavailability() {
                 {/* Skill Rows */}
                 <div className="relative">
                   {allSkills.map((skill) => (
-                    <div key={skill} className="flex border-b border-white/5 hover:bg-white/[0.03] transition-colors h-16 group">
+                    <div key={skill} className="flex border-b border-white/5 hover:bg-white/[0.03] transition-colors h-14 md:h-16 group">
                       {/* Skill Name Column */}
-                      <div className="w-56 shrink-0 sticky left-0 z-20 bg-card/90 backdrop-blur-md border-r border-white/10 p-5 flex items-center shadow-[4px_0_15px_rgba(0,0,0,0.2)] group-hover:bg-card transition-colors">
+                      <div className="w-32 md:w-56 shrink-0 sticky left-0 z-20 bg-card/90 backdrop-blur-md border-r border-white/10 p-3 md:p-5 flex items-center shadow-[4px_0_15px_rgba(0,0,0,0.2)] group-hover:bg-card transition-colors">
                         <div className="flex flex-col gap-0.5 pointer-events-none">
-                          <span className="text-[10px] font-black uppercase tracking-wider text-white/90 truncate">{skill}</span>
-                          <span className="text-[8px] text-muted-foreground font-bold italic opacity-60">Status Pool</span>
+                          <span className="text-[9px] md:text-[10px] font-black uppercase tracking-wider text-white/90 truncate">{skill}</span>
+                          <span className="text-[7px] md:text-[8px] text-muted-foreground font-bold italic opacity-60">Status Pool</span>
                         </div>
                       </div>
 

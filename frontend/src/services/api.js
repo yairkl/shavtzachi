@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { gsheetsService } from './gsheetsService';
-import { generateShifts, solveShiftAssignmentGreedy, evaluateSoldierFitness } from '../lib/schedulerCore';
+import { generateShifts, solveShiftAssignmentGreedy, evaluateSoldierFitness, checkManpower as coreCheckManpower } from '../lib/schedulerCore';
 import { parseISO, format, addDays, subDays } from 'date-fns';
 
 // Toggle between 'api' and 'gsheets'
@@ -278,7 +278,6 @@ export const checkManpower = async (startDate, endDate) => {
         });
         const posts = await gsheetsService.getPosts();
         
-        const { checkManpower: coreCheckManpower } = await import('../lib/schedulerCore');
         const report = coreCheckManpower(startDate, endDate, soldiers, posts);
         return { data: report };
     }

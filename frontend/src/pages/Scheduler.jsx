@@ -219,7 +219,7 @@ export default function Scheduler() {
   const [isDraft, setIsDraft] = useState(false);
   const [currentDate, setCurrentDate] = useState(startOfToday());
   const [viewMode, setViewMode] = useState('post');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [dragOverSlotKey, setDragOverSlotKey] = useState(null);
   const [soldierFilter, setSoldierFilter] = useState('');
   const [skillFilter, setSkillFilter] = useState(''); // Filter by skill/role
@@ -602,26 +602,26 @@ export default function Scheduler() {
   const warningCount = isDraft ? new Set(warnings.map(w => w.slotIndex)).size : 0;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-100px)] gap-4 p-4 overflow-hidden">
+    <div className="flex flex-col h-[calc(100vh-100px)] md:h-[calc(100vh-100px)] gap-4 p-4 overflow-hidden">
       {/* Header Bar - Now Top-Level and Full Width */}
-      <div className="flex justify-between items-center shrink-0 border-b border-white/10 pb-4">
-        <div className="flex items-center gap-4">
+      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center shrink-0 border-b border-white/10 pb-4 gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <h2 className="text-xl font-black tracking-tight text-white flex items-center gap-3">
-             Shift Scheduler {isDraft && <Badge variant="secondary" className="bg-amber-500/20 text-amber-300 border-amber-500/50 animate-pulse px-2 py-0.5 text-[10px]">DRAFT</Badge>}
+             <span className="hidden sm:inline">Shift Scheduler</span>
+             <span className="sm:hidden text-lg">Scheduler</span>
+             {isDraft && <Badge variant="secondary" className="bg-amber-500/20 text-amber-300 border-amber-500/50 animate-pulse px-2 py-0.5 text-[10px]">DRAFT</Badge>}
              {!isDraft && filledSlots > 0 && <Badge variant="secondary" className="bg-emerald-500/20 text-emerald-300 border-emerald-500/50 gap-1 px-2 py-0.5 text-[10px]"><CheckCircle2 className="w-2.5 h-2.5"/> SAVED</Badge>}
           </h2>
           {totalSlots > 0 && (
-            <div className="flex items-center gap-2 text-[10px] bg-white/5 px-2.5 py-1 rounded-full border border-white/5">
-              <span className="text-emerald-400 font-semibold">{filledSlots} filled</span>
-              <span className="text-slate-600">·</span>
-              <span className="text-slate-400">{emptySlots} empty</span>
-              <span className="text-slate-600">·</span>
-              <span className="text-slate-500">{totalSlots} total</span>
+            <div className="flex items-center gap-1.5 text-[9px] bg-white/5 px-2 py-0.5 rounded-full border border-white/5 overflow-x-auto whitespace-nowrap scrollbar-hide max-w-[150px] sm:max-w-none">
+              <span className="text-emerald-400 font-semibold">{filledSlots}</span>
+              <span className="text-slate-600">/</span>
+              <span className="text-slate-400">{totalSlots}</span>
               {warningCount > 0 && (
                 <>
                   <span className="text-slate-600">·</span>
                   <span className="text-amber-400 font-semibold flex items-center gap-1">
-                    <AlertTriangle className="w-2.5 h-2.5" /> {warningCount} {warningCount === 1 ? 'issue' : 'issues'}
+                    <AlertTriangle className="w-2 h-2" /> {warningCount}
                   </span>
                 </>
               )}
@@ -629,31 +629,31 @@ export default function Scheduler() {
           )}
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1 bg-card/40 backdrop-blur p-0.5 rounded-lg border border-white/10">
-             <Button variant={viewMode === 'soldier' ? 'secondary' : 'ghost'} size="sm" onClick={() => setViewMode('soldier')} className="h-7 gap-1.5 px-3 text-[11px] rounded-md">
-                <User className="w-3.5 h-3.5" /> Soldier
+        <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+          <div className="flex items-center gap-1 bg-card/40 backdrop-blur p-0.5 rounded-lg border border-white/10 flex-1 md:flex-none">
+             <Button variant={viewMode === 'soldier' ? 'secondary' : 'ghost'} size="sm" onClick={() => setViewMode('soldier')} className="h-7 gap-1.5 px-3 text-[11px] rounded-md flex-1">
+                <User className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Soldier</span>
              </Button>
-             <Button variant={viewMode === 'post' ? 'secondary' : 'ghost'} size="sm" onClick={() => setViewMode('post')} className="h-7 gap-1.5 px-3 text-[11px] rounded-md">
-                <LayoutGrid className="w-3.5 h-3.5" /> Post
+             <Button variant={viewMode === 'post' ? 'secondary' : 'ghost'} size="sm" onClick={() => setViewMode('post')} className="h-7 gap-1.5 px-3 text-[11px] rounded-md flex-1">
+                <LayoutGrid className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Post</span>
              </Button>
           </div>
 
           <div className="flex items-center gap-1 bg-card/40 backdrop-blur p-0.5 rounded-lg border border-white/10">
-             <Button variant="ghost" size="icon" className="h-7 w-7 hover:bg-white/10" onClick={() => setCurrentDate(d => addDays(d, -1))}>
-                <ChevronLeft className="w-3.5 h-3.5" />
+             <Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-white/10" onClick={() => setCurrentDate(d => addDays(d, -1))}>
+                <ChevronLeft className="w-3 h-3" />
              </Button>
-             <span className="text-[11px] font-bold min-w-[90px] text-center tracking-wide">{format(currentDate, 'MMM dd, yyyy')}</span>
-             <Button variant="ghost" size="icon" className="h-7 w-7 hover:bg-white/10" onClick={() => setCurrentDate(d => addDays(d, 1))}>
-                <ChevronRight className="w-3.5 h-3.5" />
+             <span className="text-[10px] font-bold min-w-[70px] text-center tracking-tight">{format(currentDate, 'MMM dd')}</span>
+             <Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-white/10" onClick={() => setCurrentDate(d => addDays(d, 1))}>
+                <ChevronRight className="w-3 h-3" />
              </Button>
           </div>
           
-          <div className="flex items-center gap-1 bg-slate-900/40 backdrop-blur-xl p-1 rounded-full border border-white/10 ring-1 ring-white/5">
+          <div className="flex items-center gap-1 bg-slate-900/40 backdrop-blur-xl p-1 rounded-full border border-white/10 ring-1 ring-white/5 flex-1 md:flex-none">
              <Button 
                onClick={handleDraft} 
                disabled={loading} 
-               className="h-8 px-6 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] gap-1.5 shadow-lg shadow-indigo-500/20 active:scale-95 shrink-0"
+               className="h-8 px-4 sm:px-6 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] gap-1.5 shadow-lg shadow-indigo-500/20 active:scale-95 shrink-0 w-full"
              >
                <Wand2 className={cn("w-3 h-3 transition-transform", loading && "animate-spin")} /> 
                <span>Auto Assign</span>
@@ -662,10 +662,10 @@ export default function Scheduler() {
           
           {(isDraft || filledSlots > 0) && (
             <div className="flex items-center gap-2">
-              <Button onClick={handleExport} variant="outline" className="h-8 px-4 text-[11px] gap-1.5 border-white/10 hover:bg-white/5 rounded-full text-slate-300">
-                <FileSpreadsheet className="w-3.5 h-3.5" /> <span className="font-bold">Excel</span>
+              <Button onClick={handleExport} variant="outline" className="h-8 px-3 sm:px-4 text-[11px] gap-1.5 border-white/10 hover:bg-white/5 rounded-full text-slate-300">
+                <FileSpreadsheet className="w-3.5 h-3.5" /> <span className="font-bold hidden sm:inline">Excel</span>
               </Button>
-              <Button onClick={handleSave} disabled={loading} className="h-8 px-4 text-[11px] gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-lg shadow-emerald-900/50 rounded-full">
+              <Button onClick={handleSave} disabled={loading} className="h-8 px-3 sm:px-4 text-[11px] gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-lg shadow-emerald-900/50 rounded-full">
                 <Save className="w-3.5 h-3.5" /> <span className="font-bold">Save</span>
               </Button>
             </div>
@@ -713,16 +713,16 @@ export default function Scheduler() {
         {/* Timeline Grid */}
         <div className="flex-1 overflow-auto rounded-xl border border-white/10 bg-card/20 backdrop-blur-xl shadow-2xl relative custom-scrollbar">
           {resources.length > 0 ? (
-            <div className="min-w-[800px] w-full mt-1">
+            <div className="min-w-[700px] md:min-w-[800px] w-full mt-1">
               {/* Header Timeline */}
               <div className="flex sticky top-0 z-30 bg-background/95 backdrop-blur-sm border-b border-white/10 uppercase tracking-widest">
-                <div className="w-56 shrink-0 sticky left-0 z-40 bg-background/95 backdrop-blur-md border-r border-white/10 p-4 font-bold text-xs text-muted-foreground flex items-center shadow-[4px_0_12px_rgba(0,0,0,0.2)]">
-                  {viewMode === 'soldier' ? 'Soldier Resource' : 'Post / Role'}
+                <div className="w-24 md:w-56 shrink-0 sticky left-0 z-40 bg-background/95 backdrop-blur-md border-r border-white/10 p-1.5 md:p-4 font-bold text-[8px] md:text-xs text-muted-foreground flex items-center shadow-[4px_0_12px_rgba(0,0,0,0.2)]">
+                  {viewMode === 'soldier' ? 'Soldier' : 'Post / Role'}
                 </div>
                 <div className="flex-1 flex relative">
                   {hours.map(h => (
-                    <div key={h} className="flex-1 border-l border-white/5 h-10 flex items-center justify-center">
-                      <span className="text-xs font-semibold text-white/50">
+                    <div key={h} className="flex-1 border-l border-white/5 h-8 md:h-10 flex items-center justify-center">
+                      <span className="text-[10px] md:text-xs font-semibold text-white/40">
                          {String(h).padStart(2, '0')}
                       </span>
                     </div>
@@ -733,7 +733,7 @@ export default function Scheduler() {
               {/* Matrix Body */}
               <div className="relative">
                 {/* Vertical hour lines */}
-                <div className="absolute inset-x-0 top-0 bottom-0 pl-56 flex pointer-events-none">
+                <div className="absolute inset-x-0 top-0 bottom-0 pl-24 md:pl-56 flex pointer-events-none">
                    {hours.map(h => (
                       <div key={h} className="flex-1 border-l border-white/5"></div>
                    ))}
@@ -743,29 +743,31 @@ export default function Scheduler() {
                   <React.Fragment key={res.id}>
                     {/* Group Header Row */}
                     {viewMode === 'post' && res.isFirstInGroup && (
-                      <div className="flex sticky left-0 z-30 bg-slate-900/80 border-y border-white/5 h-9 items-center pl-4 backdrop-blur-md">
-                         <span className="text-[10px] font-black uppercase tracking-[0.3em] text-indigo-400 flex items-center gap-3">
-                            <div className="p-1.5 bg-indigo-500/10 rounded-lg border border-indigo-500/20">
-                              <ShieldCheck className="w-3.5 h-3.5 shadow-[0_0_10px_rgba(99,102,241,0.4)]"/>
-                            </div>
-                            {res.name}
-                         </span>
-                         <div className="flex-1 h-[1px] bg-gradient-to-r from-indigo-500/20 to-transparent ml-6 opacity-50" />
+                      <div className="flex border-y border-white/5 h-9 items-center bg-slate-900/80 backdrop-blur-md">
+                        <div className="sticky left-0 z-30 flex items-center pl-4 gap-3 bg-slate-900/80 h-full pr-4 shadow-[4px_0_12px_rgba(0,0,0,0.2)]">
+                           <span className="text-[10px] font-black uppercase tracking-[0.3em] text-indigo-400 flex items-center gap-3">
+                              <div className="p-1.5 bg-indigo-500/10 rounded-lg border border-indigo-500/20">
+                                <ShieldCheck className="w-3.5 h-3.5 shadow-[0_0_10px_rgba(99,102,241,0.4)]"/>
+                              </div>
+                              {res.name}
+                           </span>
+                        </div>
+                        <div className="flex-1 h-[1px] bg-gradient-to-r from-indigo-500/20 to-transparent ml-6 opacity-30" />
                       </div>
                     )}
                     
                     <div className={cn(
-                      "flex relative border-b border-white/5 hover:bg-white/[0.03] transition-colors group",
+                      "flex relative border-b border-white/5 hover:bg-white/[0.03] transition-colors group h-12 md:h-16",
                       viewMode === 'post' && "border-l-4 border-l-transparent",
                       viewMode === 'post' && !res.isFirstInGroup && "border-l-indigo-500/20"
                     )}>
                       <div className={cn(
-                        "w-56 shrink-0 sticky left-0 z-20 bg-card/80 backdrop-blur-md border-r border-white/10 p-3 flex flex-col justify-center shadow-[4px_0_12px_rgba(0,0,0,0.1)] group-hover:bg-card/90 transition-colors",
-                        viewMode === 'post' && "pl-6"
+                        "w-24 md:w-56 shrink-0 sticky left-0 z-20 bg-card/80 backdrop-blur-md border-r border-white/10 p-1.5 md:p-3 flex flex-col justify-center shadow-[4px_0_12px_rgba(0,0,0,0.1)] group-hover:bg-card/90 transition-colors h-full",
+                        viewMode === 'post' && "pl-3 md:pl-6"
                       )}>
                          <span className={cn(
-                           "font-medium text-sm text-slate-200 truncate",
-                           viewMode === 'post' && "text-xs text-slate-400"
+                           "font-medium text-[10px] md:text-sm text-slate-200 truncate",
+                           viewMode === 'post' && "text-[9px] text-slate-400"
                           )}>
                            {viewMode === 'post' ? res.subtitle.split(' · ')[0] : res.name}
                          </span>
@@ -779,7 +781,7 @@ export default function Scheduler() {
                          )}
                       </div>
                     
-                    <div className="flex-1 relative h-16 my-1">
+                    <div className="flex-1 relative h-full">
                        {res.shifts.map(shift => {
                           const styleInfo = calculateShiftStyle(shift.start, shift.end);
                           if (!styleInfo) return null;
@@ -807,8 +809,8 @@ export default function Scheduler() {
                                  )}
                               >
                                  <div className="flex items-center justify-center h-full opacity-40">
-                                   <User className="w-3 h-3 mr-1" />
-                                   <span className="text-[10px] font-medium">Unassigned</span>
+                                   <User className="w-2.5 h-2.5 mr-0.5 md:mr-1" />
+                                   <span className="text-[8px] md:text-[10px] font-medium">Unassigned</span>
                                  </div>
                               </div>
                             );
@@ -829,7 +831,7 @@ export default function Scheduler() {
                                onClick={() => !isUnavail && handleShiftClick(shift, shift.originalIndex)}
                                style={{ left: styleInfo.left, width: styleInfo.width }}
                                className={cn(
-                                 "absolute top-1 bottom-1 p-2 rounded-lg text-xs leading-tight transition-all duration-300 overflow-hidden backdrop-blur shadow-lg group/shift",
+                                 "absolute top-1 bottom-1 p-1 md:p-2 rounded-lg text-[9px] md:text-xs leading-tight transition-all duration-300 overflow-hidden backdrop-blur shadow-lg group/shift",
                                  dragOverSlotKey === slotKey && !isUnavail && "ring-2 ring-white scale-[1.02] z-20 shadow-xl",
                                  isUnavail
                                    ? "bg-slate-800/60 border border-slate-700 text-slate-400 cursor-not-allowed"
@@ -842,13 +844,13 @@ export default function Scheduler() {
                                  styleInfo.clippedEnd && "rounded-r-none border-r-0"
                                )}
                             >
-                               <div className="font-bold truncate opacity-90 drop-shadow-sm flex items-center gap-1">
-                                 {isUnavail ? <Ban className="w-3 h-3 text-slate-500" /> : hasWarning && (
+                               <div className="font-bold truncate opacity-90 drop-shadow-sm flex items-center gap-1 text-[10px] md:text-sm">
+                                 {isUnavail ? <Ban className="w-2.5 h-2.5 text-slate-500" /> : hasWarning && (
                                    <ConflictTooltip icon={AlertTriangle} color="text-red-400" warnings={slotWarnings} />
                                  )}
                                  {viewMode === 'soldier' ? shift.post_name : shift.soldier_name}
                                </div>
-                               <div className="text-[10px] opacity-70 truncate mt-0.5">
+                               <div className="text-[8px] md:text-[10px] opacity-70 truncate mt-0.5">
                                  {format(parseISO(shift.start), 'HH:mm')} - {format(parseISO(shift.end), 'HH:mm')}
                                  {isUnavail && shift.reason && ` · ${shift.reason}`}
                                </div>
@@ -887,18 +889,32 @@ export default function Scheduler() {
           )}
         </div>
       </div>
-      {/* ===== Soldier Sidebar — RIGHT SIDE (Post view only) ===== */}
-        {viewMode === 'post' && sidebarOpen && (
-          <div className="w-64 shrink-0 flex flex-col border border-white/10 bg-card/60 backdrop-blur-xl rounded-xl overflow-hidden shadow-2xl animate-in slide-in-from-right duration-300">
-            <div className="p-3 border-b border-white/10 flex items-center justify-between bg-white/5">
-              <div className="flex items-center gap-2">
-                <Users className="w-3.5 h-3.5 text-indigo-400" />
-                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-300">Personnel</span>
+        {/* Soldier Sidebar - Responsive */}
+        {viewMode === 'post' && (
+          <>
+            {/* Mobile Backdrop */}
+            {sidebarOpen && (
+              <div 
+                className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 md:hidden transition-opacity"
+                onClick={() => setSidebarOpen(false)}
+              />
+            )}
+            <aside className={cn(
+            "fixed inset-y-0 right-0 z-50 md:z-0 w-80 bg-slate-950/95 md:bg-card/30 backdrop-blur-3xl border-l border-white/10 flex flex-col transition-transform duration-300 shadow-2xl md:shadow-none md:relative md:translate-x-0 md:bg-transparent md:border-none",
+            sidebarOpen ? "translate-x-0" : "translate-x-full"
+          )}>
+            <div className="p-4 flex flex-col h-full">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-1.5 bg-indigo-500/20 rounded-lg">
+                    <Users className="w-4 h-4 text-indigo-400" />
+                  </div>
+                  <h3 className="font-bold text-sm tracking-tight">Available Personnel</h3>
+                </div>
+                <Button variant="ghost" size="icon" className="h-8 w-8 md:hidden" onClick={() => setSidebarOpen(false)}>
+                  <X className="w-4 h-4" />
+                </Button>
               </div>
-              <Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-red-500/20 hover:text-red-400 rounded-full" onClick={() => setSidebarOpen(false)}>
-                <PanelRightClose className="w-3.5 h-3.5" />
-              </Button>
-            </div>
             
             {/* Search + Skill filter */}
             <div className="p-3 space-y-2 border-b border-white/5 bg-slate-900/20">
@@ -954,8 +970,10 @@ export default function Scheduler() {
                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-tighter">{filteredSoldiers.length} Available Personnel</span>
             </div>
           </div>
-        )}
-      </div>
+          </aside>
+        </>
+      )}
+    </div>
 
       {/* Reassignment Dialog (fallback) */}
       <Dialog open={isReassignOpen} onOpenChange={setIsReassignOpen}>

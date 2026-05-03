@@ -119,21 +119,21 @@ export default function Soldiers() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-end">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight">Personnel Management</h2>
+          <h2 className="text-2xl md:text-3xl font-bold tracking-tight">Personnel Management</h2>
           <p className="text-muted-foreground mt-1 text-sm">Manage soldier profiles and bulk data operations.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 w-full md:w-auto">
           <input type="file" ref={fileInputRef} className="hidden" accept=".csv" onChange={handleImport} />
-          <Button variant="outline" size="sm" className="gap-2" onClick={() => fileInputRef.current?.click()} disabled={loading}>
-            <Upload className="w-4 h-4" /> Import CSV
+          <Button variant="outline" size="sm" className="gap-2 flex-1 md:flex-none" onClick={() => fileInputRef.current?.click()} disabled={loading}>
+            <Upload className="w-4 h-4" /> Import
           </Button>
-          <Button variant="outline" size="sm" className="gap-2" onClick={handleExport} disabled={loading}>
-            <Download className="w-4 h-4" /> Export CSV
+          <Button variant="outline" size="sm" className="gap-2 flex-1 md:flex-none" onClick={handleExport} disabled={loading}>
+            <Download className="w-4 h-4" /> Export
           </Button>
-          <Button size="sm" className="gap-2 ml-2" onClick={handleOpenAdd}>
-            <UserPlus className="w-4 h-4" /> Add Soldier
+          <Button size="sm" className="gap-2 flex-1 md:flex-none" onClick={handleOpenAdd}>
+            <UserPlus className="w-4 h-4" /> Add
           </Button>
         </div>
       </div>
@@ -150,13 +150,13 @@ export default function Soldiers() {
              </Button>
           </div>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader className="bg-muted/50 text-[11px] uppercase tracking-wider">
               <TableRow>
                 <TableHead className="w-[80px] pl-6 text-muted-foreground">ID</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Qualifications</TableHead>
+                <TableHead className="min-w-[150px]">Name</TableHead>
+                <TableHead className="min-w-[200px]">Qualifications</TableHead>
                 <TableHead className="text-right">Score</TableHead>
                 <TableHead className="text-right pr-6 w-[100px]">Actions</TableHead>
               </TableRow>
@@ -180,7 +180,7 @@ export default function Soldiers() {
                   </TableCell>
                   <TableCell className="text-right font-mono font-bold text-xs">{soldier.history_score.toFixed(1)}</TableCell>
                   <TableCell className="text-right pr-6">
-                    <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex justify-end gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleOpenEdit(soldier)}><Pencil className="w-3.5 h-3.5" /></Button>
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500" onClick={() => handleDelete(soldier.id)}><Trash2 className="w-3.5 h-3.5" /></Button>
                     </div>
