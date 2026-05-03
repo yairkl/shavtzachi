@@ -3,11 +3,12 @@ import { Link, useLocation } from 'react-router-dom';
 import { 
   BarChart3, 
   Users, 
-  Settings, 
+  Settings as SettingsIcon, 
   Calendar, 
   LayoutDashboard,
   LogOut,
-  CalendarX
+  CalendarX,
+  ListChecks
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -16,8 +17,9 @@ const navItems = [
   { icon: BarChart3, label: 'Dashboard', path: '/' },
   { icon: Calendar, label: 'Scheduler', path: '/scheduler' },
   { icon: Users, label: 'Soldiers', path: '/soldiers' },
-  { icon: Settings, label: 'Posts', path: '/posts' },
+  { icon: ListChecks, label: 'Posts', path: '/posts' },
   { icon: CalendarX, label: 'Unavailability', path: '/unavailability' },
+  { icon: SettingsIcon, label: 'Settings', path: '/settings' },
 ];
 
 export default function Layout({ children }) {

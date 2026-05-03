@@ -32,11 +32,11 @@ export default function Posts() {
   const [editingPost, setEditingPost] = useState(null);
   const [formData, setFormData] = useState({
     name: "",
-    shift_length_hours: 4,
+    shift_length_hours: "4",
     start_time: "06:00",
     end_time: "05:59",
-    cooldown_hours: 0,
-    intensity_weight: 1.0,
+    cooldown_hours: "0",
+    intensity_weight: "1.0",
     slots: ["soldier"],
     is_active: true,
     active_from: "",
@@ -98,7 +98,18 @@ export default function Posts() {
 
   const handleOpenAdd = () => {
     setEditingPost(null);
-    setFormData({ name: "", shift_length_hours: 4, start_time: "06:00", end_time: "05:59", cooldown_hours: 0, intensity_weight: 1.0, slots: [availableSkills[0] || ""], is_active: true, active_from: "", active_until: "" });
+    setFormData({ 
+        name: "", 
+        shift_length_hours: "4", 
+        start_time: "06:00", 
+        end_time: "05:59", 
+        cooldown_hours: "0", 
+        intensity_weight: "1.0", 
+        slots: [availableSkills[0] || ""], 
+        is_active: true, 
+        active_from: "", 
+        active_until: "" 
+    });
     setActiveDateRange({ from: undefined, to: undefined });
     setActiveStartTime("06:00");
     setActiveEndTime("05:59");
@@ -109,11 +120,11 @@ export default function Posts() {
     setEditingPost(post);
     setFormData({
         name: post.name,
-        shift_length_hours: post.shift_length_hours,
+        shift_length_hours: String(post.shift_length_hours),
         start_time: post.start_time,
         end_time: post.end_time,
-        cooldown_hours: post.cooldown_hours,
-        intensity_weight: post.intensity_weight,
+        cooldown_hours: String(post.cooldown_hours),
+        intensity_weight: String(post.intensity_weight),
         is_active: post.is_active,
         active_from: post.active_from || "",
         active_until: post.active_until || "",
@@ -135,7 +146,12 @@ export default function Posts() {
 
   const handleSave = async () => {
     try {
-        const finalData = { ...formData };
+        const finalData = { 
+            ...formData,
+            shift_length_hours: parseFloat(formData.shift_length_hours) || 0,
+            cooldown_hours: parseFloat(formData.cooldown_hours) || 0,
+            intensity_weight: parseFloat(formData.intensity_weight) || 1.0
+        };
         if (activeDateRange?.from) {
             const sd = format(activeDateRange.from, "yyyy-MM-dd");
             finalData.active_from = `${sd}T${activeStartTime}:00`;
@@ -253,11 +269,11 @@ export default function Posts() {
                     <div className="grid grid-cols-2 gap-3">
                         <div className="space-y-2">
                             <Label className="text-xs uppercase opacity-60 font-bold tracking-wider">Weight</Label>
-                            <Input type="number" step="0.1" value={formData.intensity_weight} onChange={e => setFormData(p => ({...p, intensity_weight: parseFloat(e.target.value)}))} className="bg-background/50 border-border" />
+                            <Input type="number" step="0.1" value={formData.intensity_weight} onChange={e => setFormData(p => ({...p, intensity_weight: e.target.value}))} className="bg-background/50 border-border" />
                         </div>
                         <div className="space-y-2">
                             <Label className="text-xs uppercase opacity-60 font-bold tracking-wider">Cooldown</Label>
-                            <Input type="number" value={formData.cooldown_hours} onChange={e => setFormData(p => ({...p, cooldown_hours: parseInt(e.target.value)}))} className="bg-background/50 border-border" />
+                            <Input type="number" step="0.1" value={formData.cooldown_hours} onChange={e => setFormData(p => ({...p, cooldown_hours: e.target.value}))} className="bg-background/50 border-border" />
                         </div>
                     </div>
                     <div className="flex items-center gap-3 bg-background/30 p-2.5 rounded-lg border border-border/40">
@@ -274,7 +290,7 @@ export default function Posts() {
                 <div className="space-y-4">
                     <div className="space-y-2">
                         <Label className="text-xs uppercase opacity-60 font-bold tracking-wider">Shift Duration (Hrs)</Label>
-                        <Input type="number" value={formData.shift_length_hours} onChange={e => setFormData(p => ({...p, shift_length_hours: parseInt(e.target.value)}))} className="bg-background/50 border-border" />
+                        <Input type="number" step="0.1" value={formData.shift_length_hours} onChange={e => setFormData(p => ({...p, shift_length_hours: e.target.value}))} className="bg-background/50 border-border" />
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                         <div className="space-y-2">

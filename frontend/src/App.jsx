@@ -7,9 +7,12 @@ import Soldiers from './pages/Soldiers';
 import Posts from './pages/Posts';
 import Scheduler from './pages/Scheduler';
 import Unavailability from './pages/Unavailability';
+import Settings from './pages/Settings';
+import Setup from './pages/Setup';
 import Login from './pages/Login';
 
 import { getAuthStatus } from './services/api';
+import { gsheetsService } from './services/gsheetsService';
 
 function App() {
   const [authStatus, setAuthStatus] = useState({ authenticated: null, backend: null });
@@ -48,6 +51,11 @@ function App() {
     return <Login authStatus={authStatus} authError={authError} />;
   }
 
+  const hasSheet = !!gsheetsService.getSpreadsheetId();
+  if (!hasSheet) {
+    return <Setup />;
+  }
+
   return (
     <Router>
       <Layout>
@@ -57,6 +65,7 @@ function App() {
           <Route path="/soldiers" element={<Soldiers />} />
           <Route path="/posts" element={<Posts />} />
           <Route path="/unavailability" element={<Unavailability />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>

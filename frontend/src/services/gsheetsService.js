@@ -2,10 +2,9 @@ import axios from 'axios';
 import { parseGrid, buildScheduleRequests, buildDivisionColoringRules } from './gsheetsUtils';
 import { parseISO, format, differenceInSeconds, addHours, isBefore, isAfter, isEqual } from 'date-fns';
 
-const SPREADSHEET_ID = "1J5UACLtzAYuwZ6oqKU6BTMY2-XQszvzzml_udm_ArL0";
-
 class GSheetsService {
   constructor() {
+    this.spreadsheetId = localStorage.getItem('gsheets_spreadsheet_id');
     this.accessToken = null;
     this.client = axios.create({
       baseURL: 'https://sheets.googleapis.com/v4/spreadsheets',
@@ -39,6 +38,80 @@ class GSheetsService {
     this.CACHE_TTL = 5000; // 5 seconds
   }
 
+  getSpreadsheetId() {
+    return this.spreadsheetId;
+  }
+
+  setSpreadsheetId(id) {
+    this.spreadsheetId = id;
+    if (id) {
+      localStorage.setItem('gsheets_spreadsheet_id', id);
+    } else {
+      localStorage.removeItem('gsheets_spreadsheet_id');
+    }
+    this.clearCache();
+  }
+
+  async listSpreadsheets() {
+    const resp = await axios.get('https://www.googleapis.com/drive/v3/files', {
+      params: {
+        q: "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
+        fields: 'files(id, name, modifiedTime)',
+        orderBy: 'modifiedTime desc'
+      },
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`
+      }
+    });
+    return resp.data.files || [];
+  }
+
+  async createSpreadsheet(title = "Shavtzachi Scheduler") {
+    const resp = await this.client.post('/', {
+      properties: { title },
+      sheets: [
+        { properties: { title: 'Soldiers' } },
+        { properties: { title: 'Posts' } },
+        { properties: { title: 'Unavailabilities' } },
+        { properties: { title: 'Schedule', gridProperties: { frozenRowCount: 2, frozenColumnCount: 2 } } }
+      ]
+    });
+    
+    const newId = resp.data.spreadsheetId;
+    this.setSpreadsheetId(newId);
+
+    // Initialize headers
+    await this.batchUpdate([
+      {
+        updateCells: {
+          range: { sheetId: resp.data.sheets.find(s => s.properties.title === 'Soldiers').properties.sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 4 },
+          rows: [{ values: [{ userEnteredValue: { stringValue: 'Name' } }, { userEnteredValue: { stringValue: 'Division' } }, { userEnteredValue: { stringValue: 'Skills' } }, { userEnteredValue: { stringValue: 'Excluded Posts' } }] }],
+          fields: 'userEnteredValue'
+        }
+      },
+      {
+        updateCells: {
+          range: { sheetId: resp.data.sheets.find(s => s.properties.title === 'Posts').properties.sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 10 },
+          rows: [{ values: [
+            { userEnteredValue: { stringValue: 'Name' } }, { userEnteredValue: { stringValue: 'Shift Length' } }, { userEnteredValue: { stringValue: 'Start Time' } }, { userEnteredValue: { stringValue: 'End Time' } },
+            { userEnteredValue: { stringValue: 'Cooldown' } }, { userEnteredValue: { stringValue: 'Intensity' } }, { userEnteredValue: { stringValue: 'Slots' } }, { userEnteredValue: { stringValue: 'Is Active' } },
+            { userEnteredValue: { stringValue: 'Active From' } }, { userEnteredValue: { stringValue: 'Active Until' } }
+          ] }],
+          fields: 'userEnteredValue'
+        }
+      },
+      {
+        updateCells: {
+          range: { sheetId: resp.data.sheets.find(s => s.properties.title === 'Unavailabilities').properties.sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 4 },
+          rows: [{ values: [{ userEnteredValue: { stringValue: 'Soldier' } }, { userEnteredValue: { stringValue: 'Start' } }, { userEnteredValue: { stringValue: 'End' } }, { userEnteredValue: { stringValue: 'Reason' } }] }],
+          fields: 'userEnteredValue'
+        }
+      }
+    ]);
+
+    return newId;
+  }
+
   clearCache() {
     this.cache.data = null;
     this.cache.metadata = null;
@@ -50,25 +123,28 @@ class GSheetsService {
   }
 
   async fetchSheetValues(range) {
-    const resp = await this.client.get(`/${SPREADSHEET_ID}/values/${range}`);
+    if (!this.spreadsheetId) throw new Error("No Spreadsheet ID configured");
+    const resp = await this.client.get(`/${this.spreadsheetId}/values/${range}`);
     return resp.data.values || [];
   }
 
   async batchGetValues(ranges) {
+    if (!this.spreadsheetId) throw new Error("No Spreadsheet ID configured");
     const params = new URLSearchParams();
     ranges.forEach(r => params.append('ranges', r));
-    const resp = await this.client.get(`/${SPREADSHEET_ID}/values:batchGet?${params.toString()}`);
+    const resp = await this.client.get(`/${this.spreadsheetId}/values:batchGet?${params.toString()}`);
     return resp.data.valueRanges || [];
   }
 
   async fetchAllData() {
+    if (!this.spreadsheetId) throw new Error("No Spreadsheet ID configured");
     const now = Date.now();
     if (this.cache.data && (now - this.cache.lastFetch < this.CACHE_TTL)) {
       return this.cache;
     }
 
     const [metadataResp, valueRanges] = await Promise.all([
-      this.client.get(`/${SPREADSHEET_ID}?fields=sheets(properties(title,sheetId),merges,conditionalFormats)`),
+      this.client.get(`/${this.spreadsheetId}?fields=sheets(properties(title,sheetId),merges,conditionalFormats)`),
       this.batchGetValues([
         'Soldiers!A2:E',
         'Posts!A2:K',
@@ -93,24 +169,24 @@ class GSheetsService {
   }
 
   async appendValues(range, values) {
-    await this.client.post(`/${SPREADSHEET_ID}/values/${range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+    await this.client.post(`/${this.spreadsheetId}/values/${range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
       values: [values]
     });
   }
 
   async updateValues(range, values) {
-    await this.client.put(`/${SPREADSHEET_ID}/values/${range}?valueInputOption=RAW`, {
+    await this.client.put(`/${this.spreadsheetId}/values/${range}?valueInputOption=RAW`, {
       values
     });
   }
 
   async clearValues(range) {
-    await this.client.post(`/${SPREADSHEET_ID}/values/${range}:clear`);
+    await this.client.post(`/${this.spreadsheetId}/values/${range}:clear`);
   }
 
   async batchUpdate(requests) {
     try {
-      await this.client.post(`/${SPREADSHEET_ID}:batchUpdate`, { requests });
+      await this.client.post(`/${this.spreadsheetId}:batchUpdate`, { requests });
     } catch (error) {
       if (error.response && error.response.data && error.response.data.error) {
         const detail = error.response.data.error.message;
@@ -173,7 +249,8 @@ class GSheetsService {
   async createPost(data) {
     const values = [
       data.name, data.shift_length_hours, data.start_time, data.end_time,
-      data.cooldown_hours, data.intensity_weight, data.slots.map(s => s.skill).join(','),
+      data.cooldown_hours, data.intensity_weight, 
+      data.slots.map(s => typeof s === 'string' ? s : s.skill).join(','),
       data.is_active ? "1" : "0", data.active_from || "", data.active_until || ""
     ];
     await this.appendValues('Posts!A:J', values);
@@ -187,7 +264,8 @@ class GSheetsService {
     const rowIdx = post.id + 1;
     const values = [
       data.name, data.shift_length_hours, data.start_time, data.end_time,
-      data.cooldown_hours, data.intensity_weight, data.slots.map(s => s.skill).join(','),
+      data.cooldown_hours, data.intensity_weight, 
+      data.slots.map(s => typeof s === 'string' ? s : s.skill).join(','),
       data.is_active ? "1" : "0", data.active_from || "", data.active_until || ""
     ];
     await this.updateValues(`Posts!A${rowIdx}:J${rowIdx}`, [values]);
@@ -294,7 +372,7 @@ class GSheetsService {
 
     if (!sheet) {
         // Create the sheet if it doesn't exist
-        const addSheetResp = await this.client.post(`/${SPREADSHEET_ID}:batchUpdate`, {
+        const addSheetResp = await this.client.post(`/${this.spreadsheetId}:batchUpdate`, {
             requests: [{
                 addSheet: {
                     properties: {
