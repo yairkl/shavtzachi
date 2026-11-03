@@ -44,3 +44,5 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./frontend/dist
+          # Keep PR previews (pr-preview/) that live on the same branch.
+          keep_files: true
