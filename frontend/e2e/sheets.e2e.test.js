@@ -114,23 +114,6 @@ test('signed-out visitors see the login page, not a broken app', async () => {
   await s.context.close();
 });
 
-test('Settings can format the sheets for editing, without touching the data', async () => {
-  const s = await app.open(messySheet());
-  await s.go('/settings');
-  await s.page.getByText(/not set up for editing by hand/).waitFor();
-  const dataRows = () => JSON.stringify(s.fake.rows('Soldiers').slice(1));
-  const before = dataRows();
-  await s.page.getByRole('button', { name: /Format sheets for editing/ }).click();
-  await s.page.getByRole('alertdialog').getByRole('button', { name: 'Format' }).click();
-  await s.toast(/Formatted \d+ tab/);
-  assert.equal(dataRows(), before, 'data rows are unchanged (only missing header cells may be added)');
-  assert.ok(s.fake.tab('Soldiers').validations.length > 0);
-  await s.page.getByText('No problems found.').waitFor({ timeout: 8000 }).catch(() => {});
-  await s.page.getByText(/not set up for editing by hand/).waitFor({ state: 'detached' });
-  assert.deepEqual(s.problems, []);
-  await s.context.close();
-});
-
 test('Excel export of a saved schedule downloads a real file, and the soldiers CSV round-trips', async () => {
   const XLSX = (await import('xlsx')).default;
   const { readFileSync } = await import('node:fs');
@@ -155,39 +138,6 @@ test('Excel export of a saved schedule downloads a real file, and the soldiers C
   const text = readFileSync(await csv.path(), 'utf8');
   assert.match(text, /Name,Division,Skills,Excluded Posts/);
   assert.match(text, /Eli,2,"Guard, medic"|Eli,2,"guard, medic"/i);
-  assert.deepEqual(s.problems, []);
-  await s.context.close();
-});
-
-test('Check schedule finds double booking and cooldown problems typed straight into the sheet, and marks them', async () => {
-  const s = await app.open({
-    Soldiers: [HEAD.Soldiers, ['Dan', '1', 'guard', ''], ['Eli', '2', 'guard', '']],
-    Posts: [HEAD.Posts,
-      ['Gate', '4', '00:00', '00:00', '8', '1', 'guard', 'TRUE', '', ''],
-      ['Tower', '4', '00:00', '00:00', '0', '1', 'guard', 'TRUE', '', ''],
-    ],
-    Unavailabilities: [HEAD.Unavailabilities],
-    Schedule: [
-      ['Date', 'Time', 'Gate', 'Tower'],
-      ['', '', '', ''],
-      ['10/03/2025', '06:00 - 10:00', 'Dan', 'Dan'], // double booked
-      ['', '10:00 - 14:00', 'Eli', ''],
-      ['', '14:00 - 18:00', '', 'Eli'], // only 4h after Gate, which needs 8h
-    ],
-  });
-  await s.go('/settings');
-  await s.page.getByText(/Found 2 soldier/).waitFor();
-  await s.page.getByRole('button', { name: /Check schedule/ }).click();
-  await s.page.getByText(/Dan is double-booked/).first().waitFor();
-  await s.page.getByText(/rest (before|after)/).first().waitFor();
-  const marked = Object.keys(s.fake.tab('Schedule').notes || {}).sort();
-  assert.deepEqual(marked, ['2,2', '2,3', '3,2', '4,3']);
-  // fix the sheet by hand, re-check: everything is clean and the marks are gone
-  s.fake.tab('Schedule').values[2][3] = '';
-  s.fake.tab('Schedule').values[3][2] = '';
-  await s.page.getByRole('button', { name: /Check schedule/ }).click();
-  await s.page.getByText(/no problems/i).first().waitFor();
-  assert.deepEqual(Object.keys(s.fake.tab('Schedule').notes || {}), []);
   assert.deepEqual(s.problems, []);
   await s.context.close();
 });

@@ -154,26 +154,12 @@ export class FakeSheets {
           }
           case 'deleteSheet': this.sheets = this.sheets.filter((x) => x.properties.sheetId !== arg.sheetId); break;
           case 'unmergeCells': sheet.merges = []; break;
-          case 'repeatCell':
-            // Only wipes content when asked to (fields include userEnteredValue); formatting-only calls keep the data.
-            if ((arg.fields || '').split(',').some((f) => f.trim() === 'userEnteredValue')) sheet.values = [];
-            else (sheet.formatting ||= []).push({ range: arg.range, fields: arg.fields, cell: arg.cell });
-            if ((arg.fields || '').split(',').some((f) => f.trim() === 'note') && sheet.notes) {
-              const { startRowIndex = 0, endRowIndex = Infinity, startColumnIndex = 0, endColumnIndex = Infinity } = arg.range;
-              for (const key of Object.keys(sheet.notes)) {
-                const [r, c] = key.split(',').map(Number);
-                if (r >= startRowIndex && r < endRowIndex && c >= startColumnIndex && c < endColumnIndex) delete sheet.notes[key];
-              }
-            }
-            break;
-          case 'updateDimensionProperties': (sheet.dimensions ||= []).push(arg); break;
-          case 'setDataValidation': (sheet.validations ||= []).push({ range: arg.range, rule: arg.rule }); break;
+          case 'repeatCell': sheet.values = []; break;
           case 'updateCells': {
             const { startRowIndex = 0, startColumnIndex = 0 } = arg.range;
             arg.rows.forEach((row, ri) => row.values.forEach((cell, ci) => {
               const v = cell?.userEnteredValue?.stringValue;
               if (v !== undefined) this._write(sheet, startRowIndex + ri, startColumnIndex + ci, v);
-              if (cell?.note !== undefined) (sheet.notes ||= {})[`${startRowIndex + ri},${startColumnIndex + ci}`] = cell.note;
             }));
             break;
           }
@@ -181,11 +167,8 @@ export class FakeSheets {
           case 'updateSheetProperties':
             Object.assign(sheet.properties.gridProperties, arg.properties.gridProperties);
             break;
-          case 'deleteConditionalFormatRule':
-            if (arg.index >= sheet.conditionalFormats.length) throw apiError(400, `Invalid index ${arg.index}`);
-            sheet.conditionalFormats.splice(arg.index, 1);
-            break;
-          case 'addConditionalFormatRule': sheet.conditionalFormats.splice(arg.index ?? 0, 0, arg.rule); break;
+          case 'deleteConditionalFormatRule': sheet.conditionalFormats.shift(); break;
+          case 'addConditionalFormatRule': sheet.conditionalFormats.push(arg.rule); break;
           default: throw apiError(400, `Unsupported request ${kind}`);
         }
         replies.push({});

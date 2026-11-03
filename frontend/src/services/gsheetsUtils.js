@@ -167,7 +167,6 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
   // --- Data ---
   let written = 0;
   let skipped = 0;
-  const placements = [];
   assignments.forEach(a => {
     const p_name = a.post_name;
     const r_id = Number(a.role_id);
@@ -202,7 +201,6 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
     if (end_row > start_row + 1) {
       merges.push({ sheetId, startRowIndex: start_row, endRowIndex: end_row, startColumnIndex: col, endColumnIndex: col + 1 });
     }
-    placements.push({ assignment: a, row: start_row, col });
     written++;
   });
 
@@ -244,95 +242,55 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
   });
 
   requests.stats = { written, skipped };
-  requests.placements = placements; // where each assignment's cell ended up (0-based row/col)
   return requests;
 }
 
-export const DIVISION_COLORS = [
-  { red: 227 / 255, green: 242 / 255, blue: 253 / 255 },  // Blue
-  { red: 232 / 255, green: 245 / 255, blue: 233 / 255 },  // Green
-  { red: 255 / 255, green: 243 / 255, blue: 224 / 255 },  // Orange
-  { red: 243 / 255, green: 229 / 255, blue: 245 / 255 },  // Purple
-  { red: 241 / 255, green: 248 / 255, blue: 233 / 255 },  // Light green
-  { red: 224 / 255, green: 247 / 255, blue: 250 / 255 },  // Cyan
-  { red: 255 / 255, green: 249 / 255, blue: 196 / 255 },  // Yellow
-  { red: 252 / 255, green: 228 / 255, blue: 236 / 255 },  // Pink
-  { red: 239 / 255, green: 235 / 255, blue: 233 / 255 },  // Brown
-  { red: 236 / 255, green: 239 / 255, blue: 241 / 255 },  // Grey
-];
-
-const a1col = (i) => { let n = i + 1; let s = ''; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); } return s; };
-
 /**
- * Conditional formatting for the Schedule tab:
- *  - a fill colour per division (looked up from the Soldiers tab by name; division n uses colour ((n-1) mod 10)+1)
- *  - a red fill, with top priority, when the same person appears twice in one time row (a double booking you just typed)
- * The Soldiers tab and its Name/Division columns are located by header, so reordered columns still work.
- * `soldiers` = { title, nameCol, divisionCol } (0-based column indexes); without both columns only the double-booking rule is added.
+ * Builds conditional formatting rules to color cells based on soldier division.
+ * References the 'Soldiers' sheet to determine division membership.
  */
-export function buildDivisionColoringRules(sheetId, soldiers = { title: 'Soldiers', nameCol: 0, divisionCol: 1 }, grid = { rowCount: 1000, columnCount: 100 }) {
+export function buildDivisionColoringRules(sheetId) {
+  const div_colors = [
+    { red: 227 / 255, green: 242 / 255, blue: 253 / 255 },  // Blue 50
+    { red: 232 / 255, green: 245 / 255, blue: 233 / 255 },  // Green 50
+    { red: 255 / 255, green: 243 / 255, blue: 224 / 255 },  // Orange 50
+    { red: 243 / 255, green: 229 / 255, blue: 245 / 255 },  // Purple 50
+    { red: 241 / 255, green: 248 / 255, blue: 233 / 255 },  // Light Green 50
+  ];
+
   const requests = [];
-  const range = { sheetId, startRowIndex: 2, endRowIndex: Math.max(grid.rowCount || 1000, 3), startColumnIndex: 2, endColumnIndex: Math.max(grid.columnCount || 100, 3) };
-  const lastCol = a1col(range.endColumnIndex - 1);
 
-  if (soldiers && soldiers.nameCol !== undefined && soldiers.divisionCol !== undefined) {
-    const q = String(soldiers.title).replace(/'/g, "''");
-    const rng = (c) => `INDIRECT("'${q}'!$${a1col(c)}$2:$${a1col(c)}")`;
-    const division = `IFERROR(VALUE(INDEX(${rng(soldiers.divisionCol)},MATCH(C3,${rng(soldiers.nameCol)},0))),0)`;
-    DIVISION_COLORS.forEach((color, i) => {
-      requests.push({
-        addConditionalFormatRule: {
-          rule: {
-            ranges: [range],
-            booleanRule: {
-              condition: { type: 'CUSTOM_FORMULA', values: [{ userEnteredValue: `=AND(LEN(C3)>0,${division}>0,MOD(${division}-1,${DIVISION_COLORS.length})+1=${i + 1})` }] },
-              format: { backgroundColor: color },
-            },
-          },
-          index: i,
-        },
-      });
-    });
-  }
-
-  // Highest priority: the same name twice in one row.
-  requests.push({
-    addConditionalFormatRule: {
-      rule: {
-        ranges: [range],
-        booleanRule: {
-          condition: { type: 'CUSTOM_FORMULA', values: [{ userEnteredValue: `=AND(LEN(C3)>0,COUNTIF($C3:$${lastCol}3,C3)>1)` }] },
-          format: { backgroundColor: { red: 0.96, green: 0.78, blue: 0.78 }, textFormat: { bold: true } },
-        },
-      },
-      index: 0,
-    },
-  });
-  return requests;
-}
-
-/**
- * Mark cells whose assignment breaks a rule: bold dark-red text plus a note explaining why.
- * (Text colour and notes are used because conditional fills, e.g. division colours, would hide a static fill.)
- * Always starts by clearing earlier marks in the data area. marks = [{ row, col, notes: [string] }]
- */
-export function buildViolationMarkRequests(sheetId, marks, grid = { rowCount: 1000, columnCount: 100 }) {
-  const requests = [{
-    repeatCell: {
-      range: { sheetId, startRowIndex: 2, endRowIndex: Math.max(grid.rowCount || 1000, 3), startColumnIndex: 2, endColumnIndex: Math.max(grid.columnCount || 100, 3) },
-      cell: { userEnteredFormat: { textFormat: { bold: false, foregroundColor: {} } }, note: '' },
-      fields: 'note,userEnteredFormat.textFormat',
-    },
-  }];
-  for (const m of marks) {
+  // Add a rule for each color/division index
+  div_colors.forEach((color, i) => {
     requests.push({
-      updateCells: {
-        range: { sheetId, startRowIndex: m.row, endRowIndex: m.row + 1, startColumnIndex: m.col, endColumnIndex: m.col + 1 },
-        rows: [{ values: [{ note: `Problem${m.notes.length > 1 ? 's' : ''}:\n- ${m.notes.join('\n- ')}`, userEnteredFormat: { textFormat: { bold: true, foregroundColor: { red: 0.72, green: 0.05, blue: 0.05 } } } }] }],
-        fields: 'note,userEnteredFormat.textFormat',
-      },
+      addConditionalFormatRule: {
+        rule: {
+          ranges: [{
+            sheetId: sheetId,
+            startRowIndex: 2,
+            endRowIndex: 1000,
+            startColumnIndex: 2,
+            endColumnIndex: 100
+          }],
+          booleanRule: {
+            condition: {
+              type: 'CUSTOM_FORMULA',
+              values: [{
+                // Formula: lookup the soldier in the 'Soldiers' sheet and check if their division matches the color index
+                // C3 is the top-left cell of the range (startRowIndex: 2, startColumnIndex: 2)
+                userEnteredValue: `=AND(LEN(C3)>0, IFERROR(VLOOKUP(C3, INDIRECT("'Soldiers'!$A$2:$B$1000"), 2, FALSE), -1) = ${i + 1})`
+              }]
+            },
+            format: {
+              backgroundColor: color
+            }
+          }
+        },
+        index: i
+      }
     });
-  }
+  });
+
   return requests;
 }
 
@@ -426,9 +384,7 @@ export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHou
           start: startDt,
           end: endDt,
           role_id: postInfo.role_id,
-          soldier_name: soldierName,
-          row: r, // 0-based sheet position of the (top-left) cell, so problems can be marked in the sheet
-          col: cIdx
+          soldier_name: soldierName
         });
         r = currR;
       } else {
