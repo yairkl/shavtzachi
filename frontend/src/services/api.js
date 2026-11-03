@@ -171,7 +171,7 @@ export const draftSchedule = async (startDate, endDate) => {
 };
 
 export const saveSchedule = (startDate, endDate, assignments) => {
-  return gsheetsService.saveAssignments(startDate, endDate, assignments).then(() => ({ data: { status: 'success' } }));
+  return gsheetsService.saveAssignments(startDate, endDate, assignments).then((res) => ({ data: { status: 'success', violations: res?.violations || [] } }));
 };
 
 export const exportSchedule = async (startDate, endDate) => {
