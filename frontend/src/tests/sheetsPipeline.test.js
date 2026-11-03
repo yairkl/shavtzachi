@@ -416,7 +416,7 @@ describe('sheets written by earlier versions of the app / other tools', () => {
     const { shifts, assignments } = await draft(service);
     expect(shifts.length).toBeGreaterThan(0);
     expect(assignments.length).toBe(shifts.length * 2); // Gate has two slots per shift
-    expect((await service.getAssignmentsInRange('2025-03-09T00:00:00', '2025-03-10T00:00:00')).map((a) => a.soldier_name).sort()).toEqual(['Avi', 'Eli']);
+    expect((await service.getAssignmentsInRange('2025-03-09T00:00:00', '2025-03-10T00:00:00')).map((a) => a.soldier_name).sort()).toEqual(['Avi', 'Avi', 'Eli', 'Eli']); // two 4h rows per role
   });
 
   it.each([
