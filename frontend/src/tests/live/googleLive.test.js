@@ -136,6 +136,31 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
     expect((await service.getSoldiers()).map((s) => s.name)).toContain('Dan');
   }, 60000);
 
+  it('accepts the formatting/validation rules and shows typed dates and times unambiguously', async () => {
+    await service.applyFormatting(); // Google validates every formula and rule on write
+    await service.applyFormatting(); // idempotent: replaces its own rules
+    const { metadata } = await service.fetchAllData();
+    const rules = (title) => metadata.find((m) => m.properties.title === title).conditionalFormats || [];
+    const n = rules('Posts').length;
+    expect(n).toBeGreaterThan(0);
+    await service.applyFormatting();
+    service.clearCache();
+    expect((await service.fetchAllData()).metadata.find((m) => m.properties.title === 'Posts').conditionalFormats).toHaveLength(n);
+
+    // Type like a person: with the ISO / 24h formats applied, Google hands the values back unambiguously.
+    const un = (await service.fetchAllData()).raw.Unavailabilities.length;
+    await put(`'Unavailabilities'!A${un + 1}`, [['Dan', '2025-03-12 09:30', '2025-03-12 17:00', 'typed after formatting']]);
+    await put("'Posts'!A100", [['Typed', '6', '6:00 PM', '6:00 AM', '', '', 'guard', 'TRUE', '', '']]);
+    service.clearCache();
+    const { raw } = await service.fetchAllData();
+    console.log('Typed unavailability as Google returns it:', JSON.stringify(raw.Unavailabilities[raw.Unavailabilities.length - 1]));
+    const added = (await service.getUnavailabilities()).find((u) => u.reason === 'typed after formatting');
+    expect(added).toMatchObject({ start_datetime: '2025-03-12T09:30:00', end_datetime: '2025-03-12T17:00:00' });
+    const typed = (await service.getPosts()).find((p) => p.name === 'Typed');
+    expect(typed).toMatchObject({ start_time: '18:00', end_time: '06:00', is_active: true });
+    expect((await service.getHealth()).issues.some((i) => /not set up for editing/.test(i.message))).toBe(false);
+  }, 120000);
+
   it('grows the grid for a schedule wider than the default 26 columns', async () => {
     const wide = Array.from({ length: 30 }, (_, i) => [`W${i + 1}`, '12', '0:00', '0:00', '0', '1', 'guard', 'TRUE', '', '']);
     await service.appendRows("'Posts'!A:J", wide);

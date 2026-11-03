@@ -566,3 +566,10 @@ export function parsePostTable(values) {
   const { posts } = parsePosts(values && values.length ? values : [[]], issues);
   return { posts, issues };
 }
+
+/** Dates are written to the sheet as "yyyy-MM-dd HH:mm": unambiguous in any locale and readable by sheet formulas. */
+export function toSheetDateTime(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return '';
+  const p = parseDateTime(value);
+  return p ? format(p.date, 'yyyy-MM-dd HH:mm') : String(value);
+}

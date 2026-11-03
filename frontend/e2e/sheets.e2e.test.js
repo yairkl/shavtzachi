@@ -113,3 +113,20 @@ test('signed-out visitors see the login page, not a broken app', async () => {
   await s.page.getByRole('button', { name: /Sign in with Google/ }).waitFor();
   await s.context.close();
 });
+
+test('Settings can format the sheets for editing, without touching the data', async () => {
+  const s = await app.open(messySheet());
+  await s.go('/settings');
+  await s.page.getByText(/not set up for editing by hand/).waitFor();
+  const dataRows = () => JSON.stringify(s.fake.rows('Soldiers').slice(1));
+  const before = dataRows();
+  await s.page.getByRole('button', { name: /Format sheets for editing/ }).click();
+  await s.page.getByRole('alertdialog').getByRole('button', { name: 'Format' }).click();
+  await s.toast(/Formatted \d+ tab/);
+  assert.equal(dataRows(), before, 'data rows are unchanged (only missing header cells may be added)');
+  assert.ok(s.fake.tab('Soldiers').validations.length > 0);
+  await s.page.getByText('No problems found.').waitFor({ timeout: 8000 }).catch(() => {});
+  await s.page.getByText(/not set up for editing by hand/).waitFor({ state: 'detached' });
+  assert.deepEqual(s.problems, []);
+  await s.context.close();
+});

@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertCircle, AlertTriangle, CheckCircle2, Info, Loader2, RefreshCw, Wrench, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, Info, Loader2, Paintbrush, RefreshCw, Wrench, X } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { gsheetsService } from '@/services/gsheetsService';
 import { summarizeIssues } from '@/lib/sheetModel';
 import { describeError } from '@/lib/errors';
-import { notify } from '@/lib/notify';
+import { notify, useConfirm } from '@/lib/notify';
 
 const LEVEL = {
   error: { Icon: AlertCircle, cls: 'text-red-400' },
@@ -64,6 +64,7 @@ export function SheetHealthCard({ compact = false }) {
   const [health, setHealth] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const confirm = useConfirm();
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -90,6 +91,26 @@ export function SheetHealthCard({ compact = false }) {
     } catch (e) {
       console.error(e);
       notify.error(describeError(e, 'Could not repair the spreadsheet.'));
+      setBusy(false);
+    }
+  };
+
+  const format = async () => {
+    const ok = await confirm({
+      title: 'Format sheets for editing?',
+      description: 'Adds a styled header, notes, dropdowns, input checks, ISO date/24h time formats and red/amber highlighting of cells the app cannot read to the Soldiers, Posts and Unavailabilities tabs. Missing header columns are added; existing data is never changed. Highlight rules created by this app are refreshed; other formatting rules you added are kept.',
+      confirmText: 'Format',
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await gsheetsService.ensureSchema({ force: true });
+      const n = await gsheetsService.applyFormatting();
+      notify.success(`Formatted ${n} tab(s) for editing in Google Sheets.`);
+      await load();
+    } catch (e) {
+      console.error(e);
+      notify.error(describeError(e, 'Could not format the spreadsheet.'));
       setBusy(false);
     }
   };
@@ -145,6 +166,9 @@ export function SheetHealthCard({ compact = false }) {
           </Button>
           <Button variant="outline" size="sm" className="gap-2" onClick={repair} disabled={busy} title="Creates missing tabs and header columns. Never changes existing data.">
             <Wrench className="w-4 h-4" /> Repair sheet structure
+          </Button>
+          <Button variant="outline" size="sm" className="gap-2" onClick={format} disabled={busy} title="Dropdowns, validation, formats and highlighting for editing the sheet by hand. Never changes cell contents.">
+            <Paintbrush className="w-4 h-4" /> Format sheets for editing
           </Button>
         </div>
       </CardContent>

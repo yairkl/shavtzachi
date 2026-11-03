@@ -1,8 +1,9 @@
 import axios from 'axios';
 import { requestToken, notifyExpired } from './auth';
 import { notify } from '../lib/notify';
+import { buildFormattingRequests, isOurRule } from './sheetFormatting';
 import { parseGrid, buildScheduleRequests, buildDivisionColoringRules } from './gsheetsUtils';
-import { TABS, COLUMN_SPECS, buildModel, mapColumns, composeRow, colLetter, normalizeKey } from '../lib/sheetModel';
+import { TABS, COLUMN_SPECS, buildModel, mapColumns, composeRow, colLetter, normalizeKey, toSheetDateTime } from '../lib/sheetModel';
 import { parseISO, differenceInSeconds, isBefore, isAfter } from 'date-fns';
 
 const quoteTab = (title) => `'${String(title).replace(/'/g, "''")}'`;
@@ -133,6 +134,12 @@ export class GSheetsService {
       }
     ]);
 
+    // Make the new sheet pleasant to edit by hand. A failure here must not undo the creation.
+    try {
+      await this.applyFormatting();
+    } catch (e) {
+      console.warn('Could not format the new spreadsheet', e);
+    }
     return newId;
   }
 
@@ -216,6 +223,13 @@ export class GSheetsService {
     const cache = await this.fetchAllData();
     const issues = [...cache.model.issues];
     this._scheduleAssignments(cache, issues);
+    const unformatted = ['Soldiers', 'Posts', 'Unavailabilities'].filter((t) => {
+      const meta = cache.tabs[t] && cache.metadata.find((m) => m.properties.title === cache.tabs[t]);
+      return meta && !(meta.conditionalFormats || []).some(isOurRule);
+    });
+    if (unformatted.length) {
+      issues.push({ level: 'info', sheet: unformatted.join(', '), row: null, message: 'These tabs are not set up for editing by hand yet (dropdowns, validation and highlighting of problem cells). Use "Format sheets for editing".' });
+    }
     return {
       issues,
       counts: {
@@ -266,7 +280,40 @@ export class GSheetsService {
 
     this.clearCache();
     this._schemaOkFor = this.spreadsheetId;
+    if (toCreate.length) {
+      const formatted = await this.applyFormatting({ tabs: toCreate });
+      if (formatted) changes.push(`Formatted ${toCreate.join(', ')} for easy editing`);
+    }
     return changes;
+  }
+
+  /**
+   * Style the data tabs for direct editing: header, widths, notes, dropdowns, validation, date/time formats and
+   * highlighting of cells the app cannot read. Safe to run repeatedly; it never changes cell contents.
+   * Returns the number of tabs formatted.
+   */
+  async applyFormatting({ tabs: only } = {}) {
+    this.clearCache();
+    const { tabs, metadata, model } = await this.fetchAllData();
+    const sheets = [];
+    for (const tab of ['Soldiers', 'Posts', 'Unavailabilities']) {
+      const meta = tabs[tab] && metadata.find((m) => m.properties.title === tabs[tab]);
+      if (!meta) continue;
+      sheets.push({
+        tab,
+        title: tabs[tab],
+        sheetId: meta.properties.sheetId,
+        columns: model.columns[tab],
+        rowCount: meta.properties.gridProperties?.rowCount,
+        conditionalFormats: meta.conditionalFormats || [],
+      });
+    }
+    const targets = sheets.filter((s) => !only || only.includes(s.tab));
+    const requests = buildFormattingRequests(sheets, only);
+    if (!requests.length) return 0;
+    await this.batchUpdate(requests);
+    this.clearCache();
+    return targets.length;
   }
 
   async _tabInfo(tab) {
@@ -408,9 +455,9 @@ export class GSheetsService {
       cooldown_hours: data.cooldown_hours,
       intensity_weight: data.intensity_weight,
       slots: (data.slots || []).map((s) => (typeof s === 'string' ? s : s.skill)).join(', '),
-      is_active: data.is_active === false ? '0' : '1',
-      active_from: data.active_from || '',
-      active_until: data.active_until || '',
+      is_active: data.is_active === false ? 'FALSE' : 'TRUE',
+      active_from: toSheetDateTime(data.active_from),
+      active_until: toSheetDateTime(data.active_until),
     };
   }
 
@@ -449,7 +496,7 @@ export class GSheetsService {
     const soldier = soldiers.find((s) => s.id === data.soldier_id);
     if (!soldier) throw new Error('Soldier not found. Pick a soldier from the list.');
     if (!data.start_datetime || !data.end_datetime) throw new Error('Start and end are required.');
-    return { soldier: soldier.name, start: data.start_datetime, end: data.end_datetime, reason: data.reason || '' };
+    return { soldier: soldier.name, start: toSheetDateTime(data.start_datetime), end: toSheetDateTime(data.end_datetime), reason: data.reason || '' };
   }
 
   async createUnavailability(data) {
