@@ -1,3 +1,4 @@
+import { notify, useConfirm } from '@/lib/notify';
 import React, { useEffect, useState, useRef } from 'react';
 import { getPosts, createPost, updatePost, deletePost, exportPosts, importPosts, getSkills } from '@/services/api';
 import { DateTimeRangePicker } from '@/components/DateTimeRangePicker';
@@ -25,6 +26,7 @@ import {
 } from "@/components/ui/select";
 
 export default function Posts() {
+  const confirm = useConfirm();
   const [posts, setPosts] = useState([]);
   const [availableSkills, setAvailableSkills] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -68,15 +70,8 @@ export default function Posts() {
 
   const handleExport = async () => {
     try {
-        const response = await exportPosts();
-        const url = window.URL.createObjectURL(new Blob([response.data]));
-        const link = document.createElement('a');
-        link.href = url;
-        link.setAttribute('download', 'posts.csv');
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-    } catch (e) { console.error("Export failed", e); }
+        await exportPosts();
+    } catch (e) { console.error("Export failed", e); notify.error("Export failed."); }
   };
 
   const handleImport = async (e) => {
@@ -84,12 +79,12 @@ export default function Posts() {
     if (!file) return;
     try {
         setLoading(true);
-        await importPosts(file);
+        const { data } = await importPosts(file);
         fetchData();
-        alert("Import successful!");
+        notify.success(`Imported ${data.imported} new post(s).`);
     } catch (e) {
         console.error("Import failed", e);
-        alert("Import failed. Check format.");
+        notify.error("Import failed. Check the file format (CSV/XLSX with a header row).");
     } finally {
         setLoading(false);
         e.target.value = null;
@@ -174,7 +169,7 @@ export default function Posts() {
   };
 
   const handleDelete = async (name) => {
-    if (!confirm(`Are you sure?`)) return;
+    if (!(await confirm({ title: "Delete post?", description: "This cannot be undone.", confirmText: "Delete", destructive: true }))) return;
     try { await deletePost(name); fetchData(); } catch (error) { console.error(error); }
   };
 

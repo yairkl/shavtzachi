@@ -4,9 +4,11 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter }
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { useConfirm } from '@/lib/notify';
 import { Save, ExternalLink, Info } from 'lucide-react';
 
 export default function Settings() {
+  const confirm = useConfirm();
   const [spreadsheetId, setSpreadsheetId] = useState(gsheetsService.getSpreadsheetId());
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
@@ -97,8 +99,8 @@ export default function Settings() {
           </Button>
           <Button 
             variant="outline"
-            onClick={() => {
-              if (confirm("Disconnect this spreadsheet? You will be redirected to the setup page.")) {
+            onClick={async () => {
+              if (await confirm({ title: 'Change spreadsheet?', description: 'You will be redirected to the setup page. Your data stays in the spreadsheet.', confirmText: 'Change' })) {
                 gsheetsService.setSpreadsheetId(null);
                 window.location.reload();
               }
@@ -121,7 +123,7 @@ export default function Settings() {
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Storage</span>
-            <span className="font-medium text-foreground">Local Browser Storage</span>
+            <span className="font-medium text-foreground">Your Google Spreadsheet</span>
           </div>
         </CardContent>
       </Card>

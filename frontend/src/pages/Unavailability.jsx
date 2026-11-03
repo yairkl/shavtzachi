@@ -1,3 +1,4 @@
+import { notify, useConfirm } from '@/lib/notify';
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { 
   getUnavailabilities, 
@@ -66,6 +67,7 @@ import { format, parseISO, isAfter, isBefore, startOfToday, addDays, differenceI
 import { DateTimeRangePicker } from '@/components/DateTimeRangePicker';
 
 export default function Unavailability() {
+  const confirm = useConfirm();
   const [records, setRecords] = useState([]);
   const [soldiers, setSoldiers] = useState([]);
   const [availableSkills, setAvailableSkills] = useState([]);
@@ -194,7 +196,7 @@ export default function Unavailability() {
 
   const handleSave = async () => {
     try {
-      if (!formData.soldier_id) return alert("Select a soldier");
+      if (!formData.soldier_id) return notify.error("Select a soldier");
       const finalReason = reasonType === 'regular' ? 'Regular' :
                          reasonType === 'vacation' ? 'Vacation' : 
                          reasonType === 'sickness' ? 'Sickness' : formData.reason;
@@ -210,12 +212,12 @@ export default function Unavailability() {
       setIsDialogOpen(false);
       fetchData();
     } catch (e) {
-      alert(e.response?.data?.detail || "Operation failed");
+      notify.error(e.response?.data?.error?.message || e.message || "Operation failed");
     }
   };
 
   const handleDelete = async (id) => {
-    if (!confirm("Remove this unavailability record?")) return;
+    if (!(await confirm({ title: "Remove unavailability?", description: "This record will be deleted.", confirmText: "Remove", destructive: true }))) return;
     try {
       await deleteUnavailability(id);
       setIsDialogOpen(false);

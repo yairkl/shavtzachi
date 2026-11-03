@@ -1,3 +1,4 @@
+import { notify, useConfirm } from '@/lib/notify';
 import React, { useEffect, useState, useRef } from 'react';
 import { getSoldiers, createSoldier, updateSoldier, deleteSoldier, exportSoldiers, importSoldiers, getSkills, getPosts } from '@/services/api';
 import {
@@ -25,6 +26,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 
 export default function Soldiers() {
+  const confirm = useConfirm();
   const [soldiers, setSoldiers] = useState([]);
   const [availableSkills, setAvailableSkills] = useState([]);
   const [availablePosts, setAvailablePosts] = useState([]);
@@ -58,15 +60,8 @@ export default function Soldiers() {
 
   const handleExport = async () => {
     try {
-        const response = await exportSoldiers();
-        const url = window.URL.createObjectURL(new Blob([response.data]));
-        const link = document.createElement('a');
-        link.href = url;
-        link.setAttribute('download', 'soldiers.csv');
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-    } catch (e) { console.error("Export failed", e); }
+        await exportSoldiers();
+    } catch (e) { console.error("Export failed", e); notify.error("Export failed."); }
   };
 
   const handleImport = async (e) => {
@@ -74,12 +69,12 @@ export default function Soldiers() {
     if (!file) return;
     try {
         setLoading(true);
-        await importSoldiers(file);
+        const { data } = await importSoldiers(file);
         fetchData();
-        alert("Import successful!");
+        notify.success(`Imported ${data.imported} new soldier(s).`);
     } catch (e) {
         console.error("Import failed", e);
-        alert("Import failed. Please check CSV format.");
+        notify.error("Import failed. Check the file format (CSV/XLSX with a header row).");
     } finally {
         setLoading(false);
         e.target.value = null;
@@ -111,8 +106,8 @@ export default function Soldiers() {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm("Are you sure?")) return;
-    try { await deleteSoldier(id); fetchData(); } catch (e) { console.error(e); }
+    if (!(await confirm({ title: "Delete soldier?", description: "This cannot be undone.", confirmText: "Delete", destructive: true }))) return;
+    try { await deleteSoldier(id); fetchData(); } catch (e) { console.error(e); notify.error('Delete failed.'); }
   };
 
   const filteredSoldiers = soldiers.filter(s => s.name.toLowerCase().includes(searchTerm.toLowerCase()));

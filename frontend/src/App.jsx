@@ -13,10 +13,13 @@ import Login from './pages/Login';
 
 import { getAuthStatus } from './services/api';
 import { gsheetsService } from './services/gsheetsService';
+import { onSessionEvent, requestToken } from './services/auth';
+import { notify } from './lib/notify';
 
 function App() {
   const [authStatus, setAuthStatus] = useState({ authenticated: null, backend: null });
   const [loading, setLoading] = useState(true);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
 
   useEffect(() => {
@@ -31,6 +34,23 @@ function App() {
       });
 
   }, []);
+
+  useEffect(() => onSessionEvent((type) => {
+    if (type === 'expired') setSessionExpired(true);
+    if (type === 'refreshed') {
+      gsheetsService.setAccessToken(localStorage.getItem('google_access_token'));
+      setSessionExpired(false);
+    }
+  }), []);
+
+  const reconnect = async () => {
+    try {
+      await requestToken({ interactive: true });
+      notify.success('Reconnected to Google.');
+    } catch (err) {
+      notify.error(`Could not reconnect: ${err.message}`);
+    }
+  };
 
   if (loading) {
     return (
@@ -58,6 +78,12 @@ function App() {
 
   return (
     <Router>
+      {sessionExpired && (
+        <div role="alert" className="fixed top-0 inset-x-0 z-[90] flex items-center justify-center gap-3 bg-amber-500/95 text-black text-sm font-medium px-4 py-2">
+          Your Google session expired. Your work on this page is kept.
+          <button onClick={reconnect} className="underline font-bold">Reconnect</button>
+        </div>
+      )}
       <Layout>
         <Routes>
           <Route path="/" element={<Dashboard />} />

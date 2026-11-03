@@ -1,4 +1,6 @@
 import axios from 'axios';
+import { requestToken, notifyExpired } from './auth';
+import { notify } from '../lib/notify';
 import { parseGrid, buildScheduleRequests, buildDivisionColoringRules } from './gsheetsUtils';
 import { parseISO, format, differenceInSeconds, addHours, isBefore, isAfter, isEqual } from 'date-fns';
 
@@ -19,12 +21,25 @@ class GSheetsService {
 
     this.client.interceptors.response.use(
       (response) => response,
-      (error) => {
-        if (error.response && (error.response.status === 401 || error.response.status === 403)) {
-          console.warn("Access token expired or forbidden. Clearing token.");
-          localStorage.removeItem('google_access_token');
-          localStorage.removeItem('gsheets_access_token');
-          window.location.reload(); 
+      async (error) => {
+        const status = error.response?.status;
+        const config = error.config;
+        if (status === 401 && config && !config._retried) {
+          // Access token expired: refresh silently and retry the request once.
+          config._retried = true;
+          try {
+            const token = await requestToken({ interactive: false });
+            this.accessToken = token;
+            config.headers.Authorization = `Bearer ${token}`;
+            return this.client(config);
+          } catch {
+            notifyExpired();
+          }
+        } else if (status === 401) {
+          notifyExpired();
+        } else if (status === 403) {
+          const msg = error.response?.data?.error?.message;
+          notify.error(`Google denied access${msg ? `: ${msg}` : ''}. Check that you have edit permission on this spreadsheet.`);
         }
         return Promise.reject(error);
       }
@@ -191,7 +206,7 @@ class GSheetsService {
       if (error.response && error.response.data && error.response.data.error) {
         const detail = error.response.data.error.message;
         console.error("GSheets batchUpdate Error:", detail, error.response.data.error);
-        alert(`Google Sheets Error: ${detail}`);
+        notify.error(`Google Sheets error: ${detail}`);
       }
       throw error;
     }
