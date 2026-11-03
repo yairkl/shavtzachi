@@ -37,8 +37,6 @@ describe('Greedy Solver', () => {
     
     const pRareLow = { ...pRare, shift_length_hours: 1, start_time: "12:00", end_time: "13:00", cooldown_hours: 0 };
     
-    const start = new Date(2026, 0, 1, 0, 0);
-    const end = new Date(2026, 0, 1, 23, 0);
 
     const shifts = [
       { post_name: pRareLow.name, start: new Date(2026, 0, 1, 12, 0), end: new Date(2026, 0, 1, 13, 0), post: pRareLow },

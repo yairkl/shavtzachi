@@ -121,6 +121,10 @@ export const timeToMinutes = (t) => {
   return m ? parseInt(m[1], 10) * 60 + parseInt(m[2], 10) : null;
 };
 
+// Locales where a written date such as 3/4/2025 means March 4th (everywhere else it is 3 April).
+const MONTH_FIRST_LOCALES = new Set(['en_US', 'en_PH', 'fil_PH', 'en_CA']);
+export const isMonthFirstLocale = (locale) => MONTH_FIRST_LOCALES.has(String(locale || '').replace('-', '_'));
+
 const DATE_TIME_FORMATS = [
   "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", 'yyyy-MM-dd HH:mm:ss', 'yyyy-MM-dd HH:mm',
   'd/M/yyyy HH:mm:ss', 'd/M/yyyy H:mm', 'd/M/yy H:mm',
@@ -130,11 +134,15 @@ const DATE_TIME_FORMATS = [
 ];
 const DATE_ONLY_FORMATS = ['yyyy-MM-dd', 'd/M/yyyy', 'd/M/yy', 'd.M.yyyy', 'd.M.yy', 'd-M-yyyy', 'yyyy/MM/dd', 'd MMM yyyy', 'MMM d, yyyy'];
 
+// Swap day and month in a day-first format for month-first locales.
+const monthFirstFormat = (f) => f.replace(/^d([/.-])M/, 'M$1d');
+
 /**
  * Parse a date or date-time written in the sheet. Day-first ("31/12/2025") is preferred, matching
- * the Schedule sheet this app writes. Returns { date, dateOnly } or null if unparseable.
+ * the Schedule sheet this app writes, unless the spreadsheet's locale is month-first (monthFirst: true).
+ * Returns { date, dateOnly } or null if unparseable.
  */
-export function parseDateTime(raw) {
+export function parseDateTime(raw, { monthFirst = false } = {}) {
   if (raw instanceof Date) return isValid(raw) ? { date: raw, dateOnly: false } : null;
   if (typeof raw === 'number') {
     // Google Sheets / Excel serial date (days since 1899-12-30).
@@ -150,12 +158,13 @@ export function parseDateTime(raw) {
   if (!s) return null;
   const ref = new Date(2000, 0, 1, 0, 0, 0, 0);
 
+  const fmt = (f) => (monthFirst ? monthFirstFormat(f) : f);
   for (const f of DATE_TIME_FORMATS) {
-    const d = parse(s, f, ref);
+    const d = parse(s, fmt(f), ref);
     if (isValid(d)) return { date: d, dateOnly: false };
   }
   for (const f of DATE_ONLY_FORMATS) {
-    const d = parse(s, f, ref);
+    const d = parse(s, fmt(f), ref);
     if (isValid(d)) return { date: d, dateOnly: true };
   }
   const iso = parseISO(s);
@@ -286,7 +295,7 @@ function parseSoldiers(values, issues) {
   return { soldiers, map };
 }
 
-function parsePosts(values, issues) {
+function parsePosts(values, issues, dateOpts = {}) {
   const { map, issues: colIssues } = mapColumns('Posts', values[0]);
   issues.push(...colIssues);
   if (map.name === undefined) return { posts: [], map };
@@ -360,7 +369,7 @@ function parsePosts(values, issues) {
     const readDate = (field, endOfDay) => {
       const raw = cell(row, map, field);
       if (!clean(raw)) return null;
-      const p = parseDateTime(raw);
+      const p = parseDateTime(raw, dateOpts);
       if (!p) {
         issue(issues, 'warning', 'Posts', sheetRow, `${field === 'active_from' ? 'Active From' : 'Active Until'} "${clean(raw)}" for "${name}" is not a valid date; it was ignored.`);
         return null;
@@ -392,7 +401,7 @@ function parsePosts(values, issues) {
   return { posts, map };
 }
 
-function parseUnavailabilities(values, soldiers, issues) {
+function parseUnavailabilities(values, soldiers, issues, dateOpts = {}) {
   const { map, issues: colIssues } = mapColumns('Unavailabilities', values[0]);
   issues.push(...colIssues);
   if (map.soldier === undefined || map.start === undefined || map.end === undefined) return { unavailabilities: [], map };
@@ -410,8 +419,8 @@ function parseUnavailabilities(values, soldiers, issues) {
     const sol = byName.get(normalizeKey(rawName));
     if (!sol) issue(issues, 'warning', 'Unavailabilities', sheetRow, `"${rawName}" is not in the Soldiers sheet, so this unavailability has no effect.`);
 
-    const s = parseDateTime(cell(row, map, 'start'));
-    const e = parseDateTime(cell(row, map, 'end'));
+    const s = parseDateTime(cell(row, map, 'start'), dateOpts);
+    const e = parseDateTime(cell(row, map, 'end'), dateOpts);
     if (!s || !e) {
       issue(issues, 'warning', 'Unavailabilities', sheetRow, `Could not read the ${!s ? 'start' : 'end'} date "${clean(cell(row, map, !s ? 'start' : 'end'))}" for ${rawName}; the row was skipped. Use e.g. 31/12/2025 14:00 or 2025-12-31 14:00.`);
       return;
@@ -473,8 +482,9 @@ function canonicalize(soldiers, posts, issues) {
  * Build the in-memory model from raw sheet values.
  * raw = { Soldiers, Posts, Unavailabilities: any[][] | null (null = tab missing), Schedule }
  */
-export function buildModel(raw) {
+export function buildModel(raw, { locale } = {}) {
   const issues = [];
+  const dateOpts = { monthFirst: isMonthFirstLocale(locale) };
   const missing = [];
   for (const tab of ['Soldiers', 'Posts', 'Unavailabilities']) {
     if (raw[tab] === null || raw[tab] === undefined) {
@@ -489,8 +499,8 @@ export function buildModel(raw) {
   const uRaw = raw.Unavailabilities || [];
 
   const soldiersRes = raw.Soldiers ? parseSoldiers(sRaw, issues) : { soldiers: [], map: {} };
-  const postsRes = raw.Posts ? parsePosts(pRaw, issues) : { posts: [], map: {} };
-  const unavRes = raw.Unavailabilities ? parseUnavailabilities(uRaw, soldiersRes.soldiers, issues) : { unavailabilities: [], map: {} };
+  const postsRes = raw.Posts ? parsePosts(pRaw, issues, dateOpts) : { posts: [], map: {} };
+  const unavRes = raw.Unavailabilities ? parseUnavailabilities(uRaw, soldiersRes.soldiers, issues, dateOpts) : { unavailabilities: [], map: {} };
 
   canonicalize(soldiersRes.soldiers, postsRes.posts, issues);
 

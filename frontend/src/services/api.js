@@ -126,7 +126,7 @@ export const getCandidates = async (postName, start, end, roleId, draftAssignmen
   return { data: results };
 };
 
-export const getUnavailabilities = (startDate, endDate) => {
+export const getUnavailabilities = () => {
   return gsheetsService.getUnavailabilities().then(data => ({ data }));
 };
 
@@ -142,7 +142,7 @@ export const deleteUnavailability = (id) => {
   return gsheetsService.deleteUnavailability(id).then(() => ({ data: { status: 'success' } }));
 };
 
-export const draftSchedule = async (startDate, endDate, algorithm = "greedy") => {
+export const draftSchedule = async (startDate, endDate) => {
   const soldiers = await gsheetsService.getSoldiers();
   const unavailabilities = await gsheetsService.getUnavailabilities();
   soldiers.forEach(s => {

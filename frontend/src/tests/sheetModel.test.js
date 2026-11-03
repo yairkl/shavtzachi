@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  parseBool, parseNumber, parseTime, parseDateTime, parseList, mapColumns, buildModel, colLetter, composeRow, toLocalIso,
+  parseBool, isMonthFirstLocale, parseNumber, parseTime, parseDateTime, parseList, mapColumns, buildModel, colLetter, composeRow, toLocalIso,
 } from '../lib/sheetModel';
 
 describe('parseBool', () => {
@@ -74,6 +74,22 @@ describe('parseDateTime', () => {
   });
   it.each([[''], [undefined], ['soon'], ['32/13/2025'], ['2025-13-45'], [12]])('rejects %s', (raw) => {
     expect(parseDateTime(raw)).toBeNull();
+  });
+});
+
+describe('parseDateTime in month-first (US) spreadsheets', () => {
+  const iso = (r, o) => { const p = parseDateTime(r, o); return p ? toLocalIso(p.date) : null; };
+  it('reads 3/4/2025 as March 4th for en_US and as 3 April otherwise', () => {
+    expect(iso('3/4/2025 08:00', { monthFirst: true })).toBe('2025-03-04T08:00:00');
+    expect(iso('3/4/2025 08:00')).toBe('2025-04-03T08:00:00');
+    expect(iso('12/31/2025', { monthFirst: true })).toBe('2025-12-31T00:00:00');
+    expect(iso('12/31/2025')).toBeNull(); // day-first: month 31 does not exist -> reported, not guessed
+  });
+  it('ISO dates are never ambiguous', () => {
+    expect(iso('2025-03-04 08:00', { monthFirst: true })).toBe('2025-03-04T08:00:00');
+  });
+  it('knows which locales are month-first', () => {
+    expect([isMonthFirstLocale('en_US'), isMonthFirstLocale('en-US'), isMonthFirstLocale('en_GB'), isMonthFirstLocale('iw_IL'), isMonthFirstLocale(undefined)]).toEqual([true, true, false, false, false]);
   });
 });
 

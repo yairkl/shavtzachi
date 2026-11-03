@@ -146,6 +146,21 @@ describe('imported / hand-edited spreadsheets', () => {
   });
 });
 
+describe('spreadsheet locale', () => {
+  it('a US-locale sheet with hand-typed 3/4/2025 means March 4th; the same text elsewhere means 3 April', async () => {
+    const tabs = () => ({
+      Soldiers: [H.Soldiers, ['Dan', '', 'guard', '']],
+      Posts: [H.Posts, ['Gate', '4', '00:00', '00:00', '0', '1', 'guard', '1', '3/4/2025', '']],
+      Unavailabilities: [H.Unavailabilities, ['Dan', '3/4/2025 8:00:00', '3/4/2025 12:00:00', '']],
+    });
+    const us = await makeService(tabs(), { locale: 'en_US' });
+    expect((await us.service.getUnavailabilities())[0].start_datetime).toBe('2025-03-04T08:00:00');
+    expect((await us.service.getPosts())[0].active_from).toBe('2025-03-04T00:00:00');
+    const il = await makeService(tabs(), { locale: 'en_GB' });
+    expect((await il.service.getUnavailabilities())[0].start_datetime).toBe('2025-04-03T08:00:00');
+  });
+});
+
 describe('schedule tab', () => {
   const base = () => ({
     Soldiers: [H.Soldiers, ...people(3)],

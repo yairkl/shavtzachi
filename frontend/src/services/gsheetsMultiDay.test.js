@@ -4,7 +4,7 @@
  * Root cause: clearValues() was called BEFORE getAssignmentsInRange(),
  * so the sheet was always empty when we tried to read existing data.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { buildScheduleRequests, parseGrid } from './gsheetsUtils';
 import { parseISO, format } from 'date-fns';
 

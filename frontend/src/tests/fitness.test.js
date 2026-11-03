@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { evaluateSoldierFitness } from '../lib/schedulerCore';
-import { addHours, addDays } from 'date-fns';
+import { addHours } from 'date-fns';
 
 describe('Soldier Fitness Evaluation', () => {
   const sampleSkill = "commander";

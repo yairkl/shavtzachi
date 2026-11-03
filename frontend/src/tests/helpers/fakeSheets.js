@@ -26,7 +26,8 @@ const trimRow = (row) => { const r = [...row]; while (r.length && (r[r.length - 
 
 export class FakeSheets {
   /** tabs: { Title: string[][] } */
-  constructor(tabs = {}, { gridRows = 1000, gridCols = 26 } = {}) {
+  constructor(tabs = {}, { gridRows = 1000, gridCols = 26, locale = 'en_GB' } = {}) {
+    this.locale = locale;
     this.nextSheetId = 100;
     this.defaults = { rowCount: gridRows, columnCount: gridCols };
     this.sheets = [];
@@ -84,7 +85,7 @@ export class FakeSheets {
     this.calls.push(['GET', url]);
     let m = url.match(/^\/[^/?]+\?fields=/);
     if (m) {
-      return { data: { sheets: this.sheets.map((s) => ({ properties: { ...s.properties, gridProperties: { ...s.properties.gridProperties } }, merges: [...s.merges], conditionalFormats: [...s.conditionalFormats] })) } };
+      return { data: { properties: { locale: this.locale }, sheets: this.sheets.map((s) => ({ properties: { ...s.properties, gridProperties: { ...s.properties.gridProperties } }, merges: [...s.merges], conditionalFormats: [...s.conditionalFormats] })) } };
     }
     m = url.match(/^\/[^/?]+\/values:batchGet\?(.*)$/);
     if (m) {
@@ -126,7 +127,12 @@ export class FakeSheets {
     }
     m = url.match(/^\/[^/?]+:batchUpdate$/);
     if (m) return this._batch(body.requests);
-    m = url.match(/^\/?$/);
+    if (/^\/?$/.test(url)) {
+      // spreadsheets.create
+      this.sheets = [];
+      (body.sheets || [{ properties: { title: 'Sheet1' } }]).forEach((sh) => this._addSheet(sh.properties.title, [], sh.properties.gridProperties || {}));
+      return { data: { spreadsheetId: 'test-sheet', sheets: this.sheets.map((sh) => ({ properties: { ...sh.properties } })) } };
+    }
     throw apiError(404, `Unexpected POST ${url}`);
   }
 
@@ -146,6 +152,7 @@ export class FakeSheets {
             replies.push({ addSheet: { properties: JSON.parse(JSON.stringify(s.properties)) } });
             continue;
           }
+          case 'deleteSheet': this.sheets = this.sheets.filter((x) => x.properties.sheetId !== arg.sheetId); break;
           case 'unmergeCells': sheet.merges = []; break;
           case 'repeatCell': sheet.values = []; break;
           case 'updateCells': {

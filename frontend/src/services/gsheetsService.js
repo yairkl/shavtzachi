@@ -179,7 +179,7 @@ export class GSheetsService {
 
     // Look at which tabs exist first, so a missing tab never breaks the whole read.
     const metadataResp = await this.client.get(
-      `/${this.spreadsheetId}?fields=sheets(properties(title,sheetId,gridProperties),merges,conditionalFormats)`
+      `/${this.spreadsheetId}?fields=properties(locale),sheets(properties(title,sheetId,gridProperties),merges,conditionalFormats)`
     );
     const sheets = metadataResp.data.sheets || [];
     const tabs = this._resolveTabs(sheets);
@@ -191,7 +191,7 @@ export class GSheetsService {
     const raw = { Soldiers: null, Posts: null, Unavailabilities: null, Schedule: null };
     names.forEach((n, i) => { raw[n] = valueRanges[i]?.values || []; });
 
-    const model = buildModel(raw);
+    const model = buildModel(raw, { locale: metadataResp.data.properties?.locale });
 
     this.cache = {
       // Kept for callers that read the data rows directly (header row removed).

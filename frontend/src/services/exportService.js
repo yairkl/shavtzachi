@@ -1,5 +1,4 @@
 import * as XLSX from 'xlsx';
-import { format } from 'date-fns';
 
 export const exportToExcel = (data, fileName) => {
   const ws = XLSX.utils.json_to_sheet(data);

@@ -9,6 +9,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest",
+    "test:live": "vitest run src/tests/live/googleLive.test.js",
+    "test:contract": "CONTRACT=1 vitest run src/tests/googleContract.test.js",
     "test:e2e": "vite build && node --test --test-concurrency=1 \"e2e/**/*.e2e.test.js\""
   },
   "dependencies": {

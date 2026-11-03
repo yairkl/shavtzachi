@@ -1,16 +1,10 @@
-import { 
+import {
   addMinutes,
   differenceInMinutes,
-  addHours, 
-  format, 
-  parse, 
-  startOfHour, 
+  format,
+  startOfHour,
   parseISO,
-  isEqual,
-  addSeconds,
   isBefore,
-  isAfter,
-  addDays
 } from 'date-fns';
 import { parseDateTime, parseTime, timeToMinutes } from '../lib/sheetModel';
 
@@ -171,14 +165,6 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
   }
 
   // --- Data ---
-  const div_colors = [
-    { red: 227 / 255, green: 242 / 255, blue: 253 / 255 },  // Blue 50
-    { red: 232 / 255, green: 245 / 255, blue: 233 / 255 },  // Green 50
-    { red: 255 / 255, green: 243 / 255, blue: 224 / 255 },  // Orange 50
-    { red: 243 / 255, green: 229 / 255, blue: 245 / 255 },  // Purple 50
-    { red: 241 / 255, green: 248 / 255, blue: 233 / 255 },  // Light Green 50
-  ];
-
   let written = 0;
   let skipped = 0;
   assignments.forEach(a => {

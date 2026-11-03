@@ -26,10 +26,9 @@ jobs:
         working-directory: frontend
         run: npm install
 
-      - name: Lint (informational)
+      - name: Lint
         working-directory: frontend
         run: npm run lint
-        continue-on-error: true
 
       - name: Test
         working-directory: frontend

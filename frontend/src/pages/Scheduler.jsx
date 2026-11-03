@@ -272,8 +272,11 @@ export default function Scheduler() {
     finally { setLoading(false); }
   };
 
+  // Load once, and again whenever the day changes (the fetchers are recreated every render on purpose).
+  /* eslint-disable react-hooks/exhaustive-deps */
   useEffect(() => { fetchInitialData(); }, []);
   useEffect(() => { fetchDaySlots(); }, [currentDate]);
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   const getDayBounds = () => {
      const dayStart = startOfDay(currentDate);
@@ -330,6 +333,8 @@ export default function Scheduler() {
     } else {
       setCandidates([]);
     }
+  // Suggestions only need refreshing when the dialog or the selected slot changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isReassignOpen, selectedShift]);
 
   // Unique skills across all slots for the filter dropdown
@@ -576,6 +581,7 @@ export default function Scheduler() {
         return { ...res, isFirstInGroup: isFirst };
       });
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode, soldiers, posts, shifts]);
 
   const hours = Array.from({ length: 24 }).map((_, i) => (i + 6) % 24);
@@ -623,7 +629,6 @@ export default function Scheduler() {
   // Stats
   const totalSlots = shifts.length;
   const filledSlots = shifts.filter(s => s.soldier_id != null).length;
-  const emptySlots = totalSlots - filledSlots;
   const warningCount = isDraft ? new Set(warnings.map(w => w.slotIndex)).size : 0;
 
   return (
@@ -766,7 +771,7 @@ export default function Scheduler() {
                    ))}
                 </div>
 
-                {resources.map((res, resIdx) => (
+                {resources.map((res) => (
                   <React.Fragment key={res.id}>
                     {/* Group Header Row */}
                     {viewMode === 'post' && res.isFirstInGroup && (

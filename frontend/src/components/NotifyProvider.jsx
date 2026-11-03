@@ -1,21 +1,7 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-
-// Module-level bus so non-React code (services) can raise toasts too.
-const bus = new EventTarget();
-const emitToast = (type, message) => bus.dispatchEvent(new CustomEvent('toast', { detail: { type, message } }));
-
-export const notify = {
-  success: (m) => emitToast('success', m),
-  error: (m) => emitToast('error', m),
-  info: (m) => emitToast('info', m),
-};
-
-const ConfirmContext = createContext(() => Promise.resolve(false));
-
-/** const confirm = useConfirm(); if (await confirm({ title, description, confirmText, destructive })) ... */
-export const useConfirm = () => useContext(ConfirmContext);
+import { ConfirmContext, bus } from '@/lib/notify';
 
 const ICONS = { success: CheckCircle2, error: AlertCircle, info: Info };
 const STYLES = {

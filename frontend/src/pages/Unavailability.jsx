@@ -1,6 +1,6 @@
 import { notify, useConfirm } from '@/lib/notify';
 import { describeError } from '@/lib/errors';
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { 
   getUnavailabilities, 
   createUnavailability, 
@@ -82,7 +82,6 @@ export default function Unavailability() {
   // Filtering & Sorting
   const [searchTerm, setSearchTerm] = useState('');
   const [skillFilter, setSkillFilter] = useState('all');
-  const [sortBy, setSortBy] = useState('name');
   const [timelineStart, setTimelineStart] = useState(startOfToday());
   
   // Dialog State
@@ -139,6 +138,8 @@ export default function Unavailability() {
       fetchManpowerCheck();
     }, 500);
     return () => clearTimeout(timer);
+  // fetchManpowerCheck reads the current form values, which is what sd/st/ed/et track.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sd, st, ed, et]);
 
   const [dateRange, setDateRange] = useState({
