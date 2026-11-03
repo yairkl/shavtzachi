@@ -66,8 +66,8 @@ export async function startApp({ headless = true } = {}) {
     base,
     browser,
     /** Open the app signed in, pointed at a fake spreadsheet built from `tabs`. */
-    async open(tabs, { fake = new FakeSheets(tabs), signedIn = true, viewport = { width: 1400, height: 900 }, onRequest } = {}) {
-      const context = await browser.newContext({ viewport });
+    async open(tabs, { fake = new FakeSheets(tabs), signedIn = true, viewport = { width: 1400, height: 900 }, onRequest, timezoneId, locale } = {}) {
+      const context = await browser.newContext({ viewport, timezoneId, locale });
       if (signedIn) {
         await context.addInitScript(() => {
           localStorage.setItem('google_access_token', 'fake-token');
