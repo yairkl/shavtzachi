@@ -158,6 +158,13 @@ export class FakeSheets {
             // Only wipes content when asked to (fields include userEnteredValue); formatting-only calls keep the data.
             if ((arg.fields || '').split(',').some((f) => f.trim() === 'userEnteredValue')) sheet.values = [];
             else (sheet.formatting ||= []).push({ range: arg.range, fields: arg.fields, cell: arg.cell });
+            if ((arg.fields || '').split(',').some((f) => f.trim() === 'note') && sheet.notes) {
+              const { startRowIndex = 0, endRowIndex = Infinity, startColumnIndex = 0, endColumnIndex = Infinity } = arg.range;
+              for (const key of Object.keys(sheet.notes)) {
+                const [r, c] = key.split(',').map(Number);
+                if (r >= startRowIndex && r < endRowIndex && c >= startColumnIndex && c < endColumnIndex) delete sheet.notes[key];
+              }
+            }
             break;
           case 'updateDimensionProperties': (sheet.dimensions ||= []).push(arg); break;
           case 'setDataValidation': (sheet.validations ||= []).push({ range: arg.range, rule: arg.rule }); break;

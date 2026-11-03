@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertCircle, AlertTriangle, CheckCircle2, ClipboardCopy, Info, Loader2, Paintbrush, RefreshCw, Wrench, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, ClipboardCopy, Info, ListChecks, Loader2, Paintbrush, RefreshCw, Wrench, X } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { gsheetsService } from '@/services/gsheetsService';
@@ -65,6 +65,7 @@ export function SheetHealthCard({ compact = false }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const confirm = useConfirm();
+  const [scheduleCheck, setScheduleCheck] = useState(null);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -91,6 +92,22 @@ export function SheetHealthCard({ compact = false }) {
     } catch (e) {
       console.error(e);
       notify.error(describeError(e, 'Could not repair the spreadsheet.'));
+      setBusy(false);
+    }
+  };
+
+  const checkSchedule = async () => {
+    setBusy(true);
+    try {
+      const res = await gsheetsService.checkSchedule({ mark: true });
+      setScheduleCheck(res);
+      if (!res.total) notify.info('There is no saved schedule to check yet.');
+      else if (!res.violations.length) notify.success(`Checked ${res.total} assignments: no problems.`);
+      else notify.info(`${res.violations.length} problem(s) found and marked in the Schedule tab (red text with a note).`);
+    } catch (e) {
+      console.error(e);
+      notify.error(describeError(e, 'Could not check the schedule.'));
+    } finally {
       setBusy(false);
     }
   };
@@ -177,6 +194,20 @@ export function SheetHealthCard({ compact = false }) {
               : <IssueList issues={health.issues} />}
           </>
         )}
+        {scheduleCheck && scheduleCheck.total > 0 && (
+          <div className="space-y-2 border-t border-border/50 pt-4">
+            <p className="text-sm font-semibold">
+              Schedule check: {scheduleCheck.total} assignment(s), {scheduleCheck.violations.length ? `${scheduleCheck.violations.length} problem(s)` : 'no problems'}
+            </p>
+            {scheduleCheck.violations.length === 0
+              ? <p className="text-sm text-green-400 flex items-center gap-2"><CheckCircle2 className="w-4 h-4" /> Nobody is double-booked, within cooldown, unqualified or unavailable.</p>
+              : <IssueList limit={40} issues={[...new Map(scheduleCheck.violations.map((v) => [`${v.post_name}|${v.start}|${v.message}`, {
+                  level: v.type === 'unknown' ? 'warning' : 'error',
+                  sheet: 'Schedule',
+                  message: `${v.post_name} ${new Date(v.start).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}: ${v.message}`,
+                }])).values()]} />}
+          </div>
+        )}
         <div className="flex flex-wrap gap-2 pt-2">
           <Button variant="outline" size="sm" className="gap-2" onClick={load} disabled={busy}>
             <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} /> Check again
@@ -186,6 +217,9 @@ export function SheetHealthCard({ compact = false }) {
           </Button>
           <Button variant="outline" size="sm" className="gap-2" onClick={format} disabled={busy} title="Dropdowns, validation, formats and highlighting for editing the sheet by hand. Never changes cell contents.">
             <Paintbrush className="w-4 h-4" /> Format sheets for editing
+          </Button>
+          <Button variant="outline" size="sm" className="gap-2" onClick={checkSchedule} disabled={busy} title="Checks every saved assignment (including ones you edited by hand) for double booking, cooldown, missing skills, exclusions and unavailability, and marks problems in the Schedule tab.">
+            <ListChecks className="w-4 h-4" /> Check schedule
           </Button>
           <Button variant="outline" size="sm" className="gap-2" onClick={copyReport} disabled={busy} title="Copies what the app found in your spreadsheet (no people's names) so problems can be diagnosed.">
             <ClipboardCopy className="w-4 h-4" /> Copy diagnostic report

@@ -30,6 +30,13 @@ npm run build    # production build
 
 The Soldiers, Posts and Unavailabilities tabs are meant to be edited directly in Google Sheets. New spreadsheets (and newly created tabs) are formatted automatically; for an existing one use **Settings -> Spreadsheet health -> Format sheets for editing**. It adds a styled, frozen header with explanatory notes, dropdowns (TRUE/FALSE, soldier names), input checks that warn but never block, `yyyy-mm-dd hh:mm` / `hh:mm` formats (so dates read back unambiguously in any locale), and red/amber highlighting of cells the app cannot read (duplicate names, bad times, end before start, unknown soldiers...). Cell contents are never changed, and running it again refreshes only the app's own highlight rules.
 
+### Schedule rules in the sheet
+
+The Schedule tab is coloured by division (10 colours, looked up from the Soldiers tab by header, so reordered columns work). Two things protect against mistakes made while editing it by hand:
+
+- **Live:** typing a name that already appears in the same time row turns the cell red immediately (a common double booking).
+- **On demand and on every save:** *Settings -> Spreadsheet health -> Check schedule* (and every Save in the Scheduler) checks all saved assignments for double booking across any overlap, cooldown (the rest between shifts must respect both posts' cooldowns), missing skills, excluded posts, unavailability and people missing from the roster. Problem cells get bold red text and a note explaining why. Marks refresh only when you save or run the check again; they are not live formulas.
+
 ### Tests
 
 - `npm test` - unit tests, including an in-memory fake of the Google Sheets API (`src/tests/helpers/fakeSheets.js`) used to test hand-edited and imported spreadsheets end to end.

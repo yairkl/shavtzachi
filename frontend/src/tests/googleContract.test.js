@@ -115,7 +115,11 @@ describe.skipIf(!ENABLED)('requests conform to the Google Sheets v4 API', () => 
     const a = solveShiftAssignmentGreedy(shifts, soldiers, {}, []).map((x) => ({ ...x, start: x.start.toISOString(), end: x.end.toISOString() }));
     await service.saveAssignments('2025-03-10T06:00:00', '2025-03-11T06:00:00', a);
     await service.saveAssignments('2025-03-12T06:00:00', '2025-03-13T06:00:00', a.map((x) => ({ ...x, start: x.start.replace('03-10', '03-12').replace('03-11', '03-13'), end: x.end.replace('03-10', '03-12').replace('03-11', '03-13') })));
-    await service.saveAssignments('2025-03-10T06:00:00', '2025-03-13T06:00:00', []); // clear everything
+    // rule violations are marked with notes and text formatting: those requests must be valid too
+    const clash = (role) => ({ soldier_name: 'Daniel', post_name: 'Gate', role_id: role, start: '2025-03-14T06:00:00', end: '2025-03-14T14:00:00' });
+    await service.saveAssignments('2025-03-14T06:00:00', '2025-03-15T06:00:00', [clash(0), clash(1)]);
+    expect((await service.checkSchedule()).violations.length).toBeGreaterThan(0);
+    await service.saveAssignments('2025-03-10T06:00:00', '2025-03-15T06:00:00', []); // clear everything
     await service.applyFormatting();
     await service.applyFormatting(); // second run also deletes + re-adds the app's own rules
     await service.getHealth();

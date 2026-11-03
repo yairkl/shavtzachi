@@ -158,3 +158,36 @@ test('Excel export of a saved schedule downloads a real file, and the soldiers C
   assert.deepEqual(s.problems, []);
   await s.context.close();
 });
+
+test('Check schedule finds double booking and cooldown problems typed straight into the sheet, and marks them', async () => {
+  const s = await app.open({
+    Soldiers: [HEAD.Soldiers, ['Dan', '1', 'guard', ''], ['Eli', '2', 'guard', '']],
+    Posts: [HEAD.Posts,
+      ['Gate', '4', '00:00', '00:00', '8', '1', 'guard', 'TRUE', '', ''],
+      ['Tower', '4', '00:00', '00:00', '0', '1', 'guard', 'TRUE', '', ''],
+    ],
+    Unavailabilities: [HEAD.Unavailabilities],
+    Schedule: [
+      ['Date', 'Time', 'Gate', 'Tower'],
+      ['', '', '', ''],
+      ['10/03/2025', '06:00 - 10:00', 'Dan', 'Dan'], // double booked
+      ['', '10:00 - 14:00', 'Eli', ''],
+      ['', '14:00 - 18:00', '', 'Eli'], // only 4h after Gate, which needs 8h
+    ],
+  });
+  await s.go('/settings');
+  await s.page.getByText(/Found 2 soldier/).waitFor();
+  await s.page.getByRole('button', { name: /Check schedule/ }).click();
+  await s.page.getByText(/Dan is double-booked/).first().waitFor();
+  await s.page.getByText(/rest (before|after)/).first().waitFor();
+  const marked = Object.keys(s.fake.tab('Schedule').notes || {}).sort();
+  assert.deepEqual(marked, ['2,2', '2,3', '3,2', '4,3']);
+  // fix the sheet by hand, re-check: everything is clean and the marks are gone
+  s.fake.tab('Schedule').values[2][3] = '';
+  s.fake.tab('Schedule').values[3][2] = '';
+  await s.page.getByRole('button', { name: /Check schedule/ }).click();
+  await s.page.getByText(/no problems/i).first().waitFor();
+  assert.deepEqual(Object.keys(s.fake.tab('Schedule').notes || {}), []);
+  assert.deepEqual(s.problems, []);
+  await s.context.close();
+});

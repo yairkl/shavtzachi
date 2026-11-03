@@ -161,6 +161,21 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
     expect((await service.getHealth()).issues.some((i) => /not set up for editing/.test(i.message))).toBe(false);
   }, 120000);
 
+  it('accepts the schedule rule marks and colour rules, and flags a double booking', async () => {
+    const day = ['2025-03-25T06:00:00', '2025-03-26T06:00:00'];
+    const clash = (role) => ({ soldier_name: 'Dan', post_name: 'Gate', role_id: role, start: '2025-03-25T06:00:00', end: '2025-03-25T14:00:00' });
+    const saved = await service.saveAssignments(day[0], day[1], [clash(0), clash(1)]);
+    expect(saved.violations.some((v) => v.type === 'overlap')).toBe(true);
+    const { metadata } = await service.fetchAllData();
+    const schedule = metadata.find((m) => m.properties.title === 'Schedule');
+    expect(schedule.conditionalFormats.length).toBeGreaterThanOrEqual(11); // 10 division colours + double-booking rule
+    const checked = await service.checkSchedule();
+    expect(checked.violations.length).toBeGreaterThan(0);
+    // a clean save removes the marks again
+    await service.saveAssignments(day[0], day[1], []);
+    expect((await service.checkSchedule()).violations.filter((v) => v.start && new Date(v.start) >= new Date(day[0]) && new Date(v.start) < new Date(day[1]))).toEqual([]);
+  }, 120000);
+
   it('grows the grid for a schedule wider than the default 26 columns', async () => {
     const wide = Array.from({ length: 30 }, (_, i) => [`W${i + 1}`, '12', '0:00', '0:00', '0', '1', 'guard', 'TRUE', '', '']);
     await service.appendRows("'Posts'!A:J", wide);
