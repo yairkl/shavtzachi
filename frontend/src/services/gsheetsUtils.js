@@ -249,7 +249,13 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
  * Builds conditional formatting rules to color cells based on soldier division.
  * References the 'Soldiers' sheet to determine division membership.
  */
-export function buildDivisionColoringRules(sheetId) {
+/**
+ * Colours cells by the soldier's division. Each rule looks the name up in the Soldiers tab for every cell of its
+ * range, so the range must stay close to the cells actually used: covering 1000 rows x 100 columns (100,000
+ * cells, five rules) made Google Sheets take a long time to paint the colours. `extent` = { rows, cols } is the
+ * number of rows/columns in use (0-based exclusive end).
+ */
+export function buildDivisionColoringRules(sheetId, extent = { rows: 1000, cols: 100 }) {
   const div_colors = [
     { red: 227 / 255, green: 242 / 255, blue: 253 / 255 },  // Blue 50
     { red: 232 / 255, green: 245 / 255, blue: 233 / 255 },  // Green 50
@@ -268,9 +274,9 @@ export function buildDivisionColoringRules(sheetId) {
           ranges: [{
             sheetId: sheetId,
             startRowIndex: 2,
-            endRowIndex: 1000,
+            endRowIndex: Math.max(extent.rows, 3),
             startColumnIndex: 2,
-            endColumnIndex: 100
+            endColumnIndex: Math.max(extent.cols, 3)
           }],
           booleanRule: {
             condition: {
