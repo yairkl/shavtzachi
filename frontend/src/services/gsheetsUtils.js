@@ -1,4 +1,6 @@
 import { 
+  addMinutes,
+  differenceInMinutes,
   addHours, 
   format, 
   parse, 
@@ -10,29 +12,55 @@ import {
   isAfter,
   addDays
 } from 'date-fns';
+import { parseDateTime, parseTime, timeToMinutes } from '../lib/sheetModel';
+
+const gcd = (a, b) => (b === 0 ? a : gcd(b, a % b));
+const MAX_ROWS = 5000;
 
 /**
- * Port of build_schedule_requests
+ * Pick a grid step (in minutes) on which every assignment start/end lands exactly.
+ * Posts can start at any time (06:00, 06:20...) with any shift length, so a fixed step would
+ * silently drop shifts that do not line up with it.
  */
-export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDate, timeGranularityHours = 1) {
+export function chooseStepMinutes(assignments, origin) {
+  let g = 0;
+  for (const a of assignments) {
+    const s = typeof a.start === 'string' ? parseISO(a.start) : a.start;
+    const e = typeof a.end === 'string' ? parseISO(a.end) : a.end;
+    for (const t of [s, e]) {
+      const off = Math.abs(differenceInMinutes(t, origin));
+      g = gcd(g, off);
+    }
+  }
+  if (g === 0) return 60;
+  // Prefer whole hours / sensible divisions of a day when possible.
+  return Math.min(Math.max(g, 1), 24 * 60);
+}
+
+/**
+ * Port of build_schedule_requests.
+ * timeGranularityHours: fixed row height in hours, or omit/null to choose one that fits all shifts.
+ * The returned array has a `stats` property: { written, skipped }.
+ */
+export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDate, timeGranularityHours = null) {
   const sheetId = parseInt(sheetIdRaw);
   if (!assignments.length && !startDate) return [];
 
-  // 1. Standardize range to full hours (Literal port)
+  // 1. Standardize range
   const start = typeof startDate === 'string' ? parseISO(startDate) : startDate;
   const end = typeof endDate === 'string' ? parseISO(endDate) : endDate;
-  
+
   let current_time = startOfHour(start);
-  let limit_time = startOfHour(end);
-  if (isBefore(limit_time, end)) {
-    limit_time = addHours(limit_time, timeGranularityHours);
-  }
+  const stepMinutes = timeGranularityHours ? Math.round(timeGranularityHours * 60) : chooseStepMinutes(assignments, current_time);
 
   const time_steps = [];
   let temp_time = current_time;
-  while (isBefore(temp_time, limit_time)) {
+  while (isBefore(temp_time, end)) {
     time_steps.push(temp_time);
-    temp_time = addHours(temp_time, timeGranularityHours);
+    temp_time = addMinutes(temp_time, stepMinutes);
+    if (time_steps.length > MAX_ROWS) {
+      throw new Error('The schedule covers too long a period (or its shift times are too irregular) to be written to one sheet. Save a shorter period.');
+    }
   }
 
   const time_to_row = {};
@@ -125,7 +153,7 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
     const curr_date = format(t, 'dd/MM/yyyy');
     set_cell(r, 0, get_cell(curr_date));
 
-    const end_t = addHours(t, timeGranularityHours);
+    const end_t = addMinutes(t, stepMinutes);
     const time_range_str = `${format(t, 'HH:mm')} - ${format(end_t, 'HH:mm')}`;
     set_cell(r, 1, get_cell(time_range_str));
 
@@ -151,46 +179,43 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
     { red: 241 / 255, green: 248 / 255, blue: 233 / 255 },  // Light Green 50
   ];
 
+  let written = 0;
+  let skipped = 0;
   assignments.forEach(a => {
     const p_name = a.post_name;
     const r_id = Number(a.role_id);
     const raw_start = typeof a.start === 'string' ? parseISO(a.start) : a.start;
     const raw_end = typeof a.end === 'string' ? parseISO(a.end) : a.end;
 
-    const s_dt = startOfHour(raw_start);
-    let e_dt = startOfHour(raw_end);
-    if (isAfter(raw_end, e_dt)) {
-      e_dt = addHours(e_dt, timeGranularityHours);
+    // Row range covering [raw_start, raw_end): snap outwards to the grid (exact when the step was auto-chosen).
+    const gridEnd = time_steps.length ? addMinutes(time_steps[time_steps.length - 1], stepMinutes) : null;
+    if (!gridEnd || raw_start.getTime() >= gridEnd.getTime()) { skipped++; return; }
+    let startIdx = -1;
+    for (let i = 0; i < time_steps.length; i++) {
+      if (time_steps[i].getTime() <= raw_start.getTime()) startIdx = i; else break;
     }
-
-    let start_row;
-    if (!time_to_row[s_dt.toISOString()]) {
-      if (isBefore(s_dt, time_steps[0]) && isAfter(e_dt, time_steps[0])) {
-        start_row = 2;
-      } else {
-        return;
-      }
-    } else {
-      start_row = time_to_row[s_dt.toISOString()];
+    if (startIdx === -1) {
+      // Starts before the grid: only keep it if it overlaps the grid at all.
+      if (time_steps.length && raw_end.getTime() > time_steps[0].getTime()) startIdx = 0;
+      else { skipped++; return; }
     }
-
-    let end_row;
-    if (time_to_row[e_dt.toISOString()]) {
-      end_row = time_to_row[e_dt.toISOString()];
-    } else {
-      end_row = time_steps.length + 2;
+    let endIdx = time_steps.length;
+    for (let i = startIdx + 1; i < time_steps.length; i++) {
+      if (time_steps[i].getTime() >= raw_end.getTime()) { endIdx = i; break; }
     }
+    const start_row = startIdx + 2;
+    const end_row = endIdx + 2;
 
     const col = post_to_cols[p_name]?.find(pc => pc.role_id === r_id)?.col;
-    if (col !== undefined) {
-      for (let r = start_row; r < end_row; r++) {
-        // No explicit bg color — division coloring is handled via conditional formatting rules
-        set_cell(r, col, get_cell(a.soldier_name, false, null));
-      }
-      if (end_row > start_row + 1) {
-        merges.push({ sheetId, startRowIndex: start_row, endRowIndex: end_row, startColumnIndex: col, endColumnIndex: col + 1 });
-      }
+    if (col === undefined) { skipped++; return; }
+    for (let r = start_row; r < end_row; r++) {
+      // No explicit bg color — division coloring is handled via conditional formatting rules
+      set_cell(r, col, get_cell(a.soldier_name, false, null));
     }
+    if (end_row > start_row + 1) {
+      merges.push({ sheetId, startRowIndex: start_row, endRowIndex: end_row, startColumnIndex: col, endColumnIndex: col + 1 });
+    }
+    written++;
   });
 
   const requests = [];
@@ -230,6 +255,7 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
     }
   });
 
+  requests.stats = { written, skipped };
   return requests;
 }
 
@@ -297,13 +323,15 @@ export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHou
 
   const colToPost = {};
   let c = 2;
-  while (c < gridRows[0].length) {
+  // Google trims trailing blank cells per row, so the header row can be shorter than the data.
+  const width = Math.max(0, ...gridRows.map((row) => (row ? row.length : 0)));
+  while (c < width) {
     const pName = val(0, c);
     if (pName) {
       let roleId = 0;
       colToPost[c] = { name: pName, role_id: roleId };
       let lookahead = c + 1;
-      while (lookahead < gridRows[0].length && val(0, lookahead) === "" && val(1, lookahead) !== "") {
+      while (lookahead < width && val(0, lookahead) === "" && val(1, lookahead) !== "") {
         roleId++;
         colToPost[lookahead] = { name: pName, role_id: roleId };
         lookahead++;
@@ -315,23 +343,28 @@ export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHou
   }
 
   const rowToDt = {};
+  const rowStep = {}; // minutes per row, from the Time column label
+  const stepOf = (r) => (rowStep[r] ?? timeGranularityHours * 60);
   let lastDStr = null;
   for (let r = 2; r < gridRows.length; r++) {
     let dStr = val(r, 0) || lastDStr;
     let tStr = val(r, 1);
     if (dStr && tStr) {
       lastDStr = dStr;
-      if (tStr.includes(" - ")) tStr = tStr.split(" - ")[0];
-      try {
-        let dt;
-        const cleanRef = new Date(2024, 0, 1, 0, 0, 0, 0);
-        if (dStr.includes("/")) {
-          dt = parse(`${dStr} ${tStr}`, "dd/MM/yyyy HH:mm", cleanRef);
-        } else {
-          dt = parse(`${dStr} ${tStr}`, "yyyy-MM-dd HH:mm", cleanRef);
+      let endLabel = null;
+      if (tStr.includes(" - ")) { [tStr, endLabel] = tStr.split(" - "); }
+      // Tolerates "6:00", "06:00", d/M/yyyy and yyyy-MM-dd, written by hand or by this app.
+      const label = tStr.trim();
+      const parsed = parseDateTime(`${dStr} ${label}`);
+      if (parsed && !parsed.dateOnly) {
+        rowToDt[r] = parsed.date;
+        // The row's own "HH:mm - HH:mm" label tells how long the row is, whatever step the sheet was written with.
+        if (endLabel) {
+          const sm = timeToMinutes(parseTime(label));
+          const em = timeToMinutes(parseTime(endLabel));
+          if (sm !== null && em !== null) rowStep[r] = ((em - sm) + 24 * 60) % (24 * 60) || 24 * 60;
         }
-        rowToDt[r] = dt;
-      } catch (e) {}
+      }
     }
   }
 
@@ -352,12 +385,12 @@ export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHou
             endDt = rowToDt[endRow];
           } else {
             const lastR = Math.max(...Object.keys(rowToDt).map(Number));
-            endDt = addHours(rowToDt[lastR], (endRow - lastR) * timeGranularityHours);
+            endDt = addMinutes(rowToDt[lastR], (endRow - lastR) * stepOf(lastR));
           }
           currR = endRow;
         } else {
           currR = r + 1;
-          endDt = addHours(rowToDt[r], timeGranularityHours);
+          endDt = addMinutes(rowToDt[r], stepOf(r));
         }
 
         assignments.push({

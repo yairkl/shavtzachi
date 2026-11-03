@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { gsheetsService } from '../services/gsheetsService';
+import { describeError } from '../lib/errors';
+import { useConfirm } from '../lib/notify';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,6 +17,7 @@ import {
 } from 'lucide-react';
 
 export default function Setup() {
+  const confirm = useConfirm();
   const [view, setView] = useState('choice'); // 'choice', 'create', 'select'
   const [loading, setLoading] = useState(false);
   const [spreadsheets, setSpreadsheets] = useState([]);
@@ -34,7 +37,7 @@ export default function Setup() {
       const files = await gsheetsService.listSpreadsheets();
       setSpreadsheets(files);
     } catch (err) {
-      setError("Failed to load spreadsheets from Google Drive.");
+      setError(describeError(err, "Failed to load spreadsheets from Google Drive."));
       console.error(err);
     } finally {
       setLoading(false);
@@ -48,15 +51,36 @@ export default function Setup() {
       await gsheetsService.createSpreadsheet(newTitle);
       window.location.reload();
     } catch (err) {
-      setError("Failed to create spreadsheet. Ensure you have the required permissions.");
+      setError(describeError(err, "Failed to create spreadsheet."));
       console.error(err);
       setLoading(false);
     }
   };
 
-  const handleSelect = (id) => {
+  const handleSelect = async (id) => {
+    setLoading(true);
+    setError(null);
     gsheetsService.setSpreadsheetId(id);
-    window.location.reload();
+    try {
+      // Check we can actually read it, and that it has the tabs the app needs.
+      const health = await gsheetsService.getHealth();
+      const missing = health.missingTabs;
+      if (missing.length) {
+        const ok = await confirm({
+          title: 'Add the missing tabs?',
+          description: `This spreadsheet has no ${missing.join(', ')} tab${missing.length > 1 ? 's' : ''}. We can add ${missing.length > 1 ? 'them' : 'it'} (with headers). Your existing data is not changed.`,
+          confirmText: 'Add tabs',
+          cancelText: 'Not now',
+        });
+        if (ok) await gsheetsService.ensureSchema({ force: true });
+      }
+      window.location.reload();
+    } catch (err) {
+      console.error(err);
+      gsheetsService.setSpreadsheetId(null);
+      setError(describeError(err, 'Could not open that spreadsheet.'));
+      setLoading(false);
+    }
   };
 
   const renderChoice = () => (

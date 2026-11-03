@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { getSoldiers, getPosts, getUnavailabilities, getShiftsWithAssignments } from '@/services/api';
 import { format, addDays } from 'date-fns';
 import { notify } from '@/lib/notify';
+import { SheetHealthCard } from '@/components/SheetHealth';
+import { describeError } from '@/lib/errors';
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Users, Shield, TrendingUp, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -44,7 +46,7 @@ export default function Dashboard() {
         setCoverage({ total: slots.length, filled: slots.filter(x => x.soldier_id).length });
       } catch (error) {
         console.error("Dashboard data fetch error:", error);
-        notify.error("Could not load dashboard data.");
+        notify.error(describeError(error, "Could not load dashboard data."));
         setLoading(false);
       }
     };
@@ -62,6 +64,8 @@ export default function Dashboard() {
           <p className="text-muted-foreground text-base md:text-lg mt-1 md:mt-2">Operational readiness and workload distribution overview.</p>
         </div>
       </div>
+
+      <SheetHealthCard compact />
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
         <StatCard

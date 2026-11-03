@@ -1,4 +1,5 @@
 import { notify, useConfirm } from '@/lib/notify';
+import { describeError } from '@/lib/errors';
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { 
   getUnavailabilities, 
@@ -113,6 +114,7 @@ export default function Unavailability() {
       setAvailableSkills(skData);
     } catch (error) {
       console.error("Error fetching data:", error);
+      notify.error(describeError(error, "Could not load unavailabilities."));
     } finally {
       setLoading(false);
     }
@@ -212,7 +214,7 @@ export default function Unavailability() {
       setIsDialogOpen(false);
       fetchData();
     } catch (e) {
-      notify.error(e.response?.data?.error?.message || e.message || "Operation failed");
+      notify.error(describeError(e, "Operation failed"));
     }
   };
 
@@ -222,7 +224,7 @@ export default function Unavailability() {
       await deleteUnavailability(id);
       setIsDialogOpen(false);
       fetchData();
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error(e); notify.error(describeError(e, "Delete failed.")); }
   };
 
   const handleTimelineClick = (soldierId, e) => {

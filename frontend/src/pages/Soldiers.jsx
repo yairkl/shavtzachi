@@ -1,4 +1,6 @@
 import { notify, useConfirm } from '@/lib/notify';
+import { describeError } from '@/lib/errors';
+import { ImportReport } from '@/components/SheetHealth';
 import React, { useEffect, useState, useRef } from 'react';
 import { getSoldiers, createSoldier, updateSoldier, deleteSoldier, exportSoldiers, importSoldiers, getSkills, getPosts } from '@/services/api';
 import {
@@ -27,6 +29,7 @@ import { Label } from "@/components/ui/label";
 
 export default function Soldiers() {
   const confirm = useConfirm();
+  const [importReport, setImportReport] = useState(null);
   const [soldiers, setSoldiers] = useState([]);
   const [availableSkills, setAvailableSkills] = useState([]);
   const [availablePosts, setAvailablePosts] = useState([]);
@@ -51,6 +54,7 @@ export default function Soldiers() {
       setAvailablePosts(postsData);
     } catch (error) {
       console.error("Error fetching data:", error);
+      notify.error(describeError(error, "Could not load soldiers."));
     } finally {
       setLoading(false);
     }
@@ -71,10 +75,11 @@ export default function Soldiers() {
         setLoading(true);
         const { data } = await importSoldiers(file);
         fetchData();
-        notify.success(`Imported ${data.imported} new soldier(s).`);
+        if (data.issues.some(i => i.level !== 'info') || data.skipped) setImportReport({ ...data, kind: 'soldier(s)' });
+        else notify.success(`Imported ${data.imported} new soldier(s).`);
     } catch (e) {
         console.error("Import failed", e);
-        notify.error("Import failed. Check the file format (CSV/XLSX with a header row).");
+        notify.error(`Import failed: ${describeError(e, "check the file format (CSV/XLSX with a header row).")}`);
     } finally {
         setLoading(false);
         e.target.value = null;
@@ -102,12 +107,12 @@ export default function Soldiers() {
         else await createSoldier(payload);
         setIsDialogOpen(false);
         fetchData();
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error(e); notify.error(describeError(e, "Could not save the soldier.")); }
   };
 
   const handleDelete = async (id) => {
     if (!(await confirm({ title: "Delete soldier?", description: "This cannot be undone.", confirmText: "Delete", destructive: true }))) return;
-    try { await deleteSoldier(id); fetchData(); } catch (e) { console.error(e); notify.error('Delete failed.'); }
+    try { await deleteSoldier(id); fetchData(); } catch (e) { console.error(e); notify.error(describeError(e, 'Delete failed.')); }
   };
 
   const filteredSoldiers = soldiers.filter(s => s.name.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -240,6 +245,7 @@ export default function Soldiers() {
             </DialogFooter>
         </DialogContent>
       </Dialog>
+      <ImportReport report={importReport} onClose={() => setImportReport(null)} />
     </div>
   );
 }

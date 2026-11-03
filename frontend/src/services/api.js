@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import { gsheetsService } from './gsheetsService';
 import { ensureToken } from './auth';
+import { parseSoldierTable, parsePostTable, normalizeKey } from '../lib/sheetModel';
 import { exportToExcel, exportSoldiersToCSV } from './exportService';
 import { generateShifts, solveShiftAssignmentGreedy, evaluateSoldierFitness, checkManpower as coreCheckManpower } from '../lib/schedulerCore';
 import { parseISO, format, addDays } from 'date-fns';
@@ -67,14 +68,14 @@ export const getShiftsWithAssignments = async (startDate, endDate) => {
 
   const assignmentLookup = {};
   assignments.forEach(a => {
-    const key = `${a.post_name}-${toKey(a.start)}-${a.role_id}`;
+    const key = `${normalizeKey(a.post_name)}-${toKey(a.start)}-${a.role_id}`;
     assignmentLookup[key] = a;
   });
 
   const result = [];
   shifts.forEach(shift => {
     shift.post.slots.forEach(slot => {
-      const key = `${shift.post_name}-${toKey(shift.start)}-${slot.role_index}`;
+      const key = `${normalizeKey(shift.post_name)}-${toKey(shift.start)}-${slot.role_index}`;
       const a = assignmentLookup[key];
       result.push({
         post_name: shift.post_name,
@@ -193,34 +194,38 @@ export const exportSoldiers = async () => {
       return;
 };
 
-const readRows = async (file) => {
-  const buf = await file.arrayBuffer();
-  const wb = XLSX.read(buf, { type: 'array' });
-  return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
-};
-const splitList = (v) => String(v || '').split(',').map(x => x.trim()).filter(Boolean);
-const pick = (row, ...keys) => {
-  for (const k of keys) if (row[k] !== undefined && row[k] !== '') return row[k];
-  return '';
+/** Read a CSV/XLSX file into a 2D array of strings (header row first). */
+const readTable = async (file, preferredSheet) => {
+  let wb;
+  if (/\.csv$|\.txt$/i.test(file.name || '') || file.type === 'text/csv') {
+    let text = await file.text();
+    text = text.replace(/^\uFEFF/, '');
+    const first = text.split(/\r?\n/, 1)[0] || '';
+    const counts = { ',': (first.match(/,/g) || []).length, ';': (first.match(/;/g) || []).length, '\t': (first.match(/\t/g) || []).length };
+    const FS = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+    wb = XLSX.read(text, { type: 'string', FS, raw: true });
+  } else {
+    wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: false });
+  }
+  if (!wb.SheetNames.length) throw new Error('The file has no sheets.');
+  const name = wb.SheetNames.find(n => n.trim().toLowerCase() === preferredSheet.toLowerCase()) || wb.SheetNames[0];
+  return XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false, defval: '', blankrows: false });
 };
 
 export const importSoldiers = async (file) => {
-  const rows = await readRows(file);
-  const existing = new Set((await gsheetsService.getSoldiers()).map(s => s.name));
-  let imported = 0;
-  for (const row of rows) {
-    const name = String(pick(row, 'Name', 'name')).trim();
-    if (!name || existing.has(name)) continue;
-    await gsheetsService.createSoldier({
-      name,
-      division: parseInt(pick(row, 'Division', 'division')) || null,
-      skills: splitList(pick(row, 'Skills', 'skills')),
-      excluded_posts: splitList(pick(row, 'Excluded Posts', 'excluded_posts')),
-    });
-    existing.add(name);
-    imported++;
+  const table = await readTable(file, 'Soldiers');
+  const { soldiers, issues } = parseSoldierTable(table);
+  const existing = new Set((await gsheetsService.getSoldiers()).map(s => normalizeKey(s.name)));
+  const fresh = [];
+  for (const s of soldiers) {
+    if (existing.has(normalizeKey(s.name))) {
+      issues.push({ level: 'info', sheet: 'Import', row: null, message: `"${s.name}" already exists; skipped.` });
+      continue;
+    }
+    fresh.push(s);
   }
-  return { data: { imported } };
+  await gsheetsService.appendSoldiers(fresh);
+  return { data: { imported: fresh.length, skipped: soldiers.length - fresh.length, issues } };
 };
 
 export const exportPosts = async () => {
@@ -239,26 +244,19 @@ export const exportPosts = async () => {
 };
 
 export const importPosts = async (file) => {
-  const rows = await readRows(file);
-  const existing = new Set((await gsheetsService.getPosts()).map(p => p.name));
-  let imported = 0;
-  for (const row of rows) {
-    const name = String(pick(row, 'Name', 'name')).trim();
-    if (!name || existing.has(name)) continue;
-    await gsheetsService.createPost({
-      name,
-      shift_length_hours: Number(pick(row, 'Shift Length', 'shift_length_hours')) || 8,
-      start_time: String(pick(row, 'Start Time', 'start_time') || '00:00'),
-      end_time: String(pick(row, 'End Time', 'end_time') || '00:00'),
-      cooldown_hours: Number(pick(row, 'Cooldown', 'cooldown_hours')) || 0,
-      intensity_weight: Number(pick(row, 'Intensity', 'intensity_weight')) || 1,
-      slots: splitList(pick(row, 'Slots', 'slots')),
-      is_active: true,
-    });
-    existing.add(name);
-    imported++;
+  const table = await readTable(file, 'Posts');
+  const { posts, issues } = parsePostTable(table);
+  const existing = new Set((await gsheetsService.getPosts()).map(p => normalizeKey(p.name)));
+  const fresh = [];
+  for (const p of posts) {
+    if (existing.has(normalizeKey(p.name))) {
+      issues.push({ level: 'info', sheet: 'Import', row: null, message: `"${p.name}" already exists; skipped.` });
+      continue;
+    }
+    fresh.push(p);
   }
-  return { data: { imported } };
+  await gsheetsService.appendPosts(fresh);
+  return { data: { imported: fresh.length, skipped: posts.length - fresh.length, issues } };
 };
 
 export const checkManpower = async (startDate, endDate) => {

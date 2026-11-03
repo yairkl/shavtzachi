@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { getSoldiers, getPosts, getShiftsWithAssignments, draftSchedule, saveSchedule, getCandidates, getUnavailabilities, exportSchedule } from '@/services/api';
 import { Button } from '@/components/ui/button';
+import { notify } from '@/lib/notify';
+import { describeError } from '@/lib/errors';
+import { DiagnosticsBanner } from '@/components/SheetHealth';
+import { diagnoseInputs, summarizeUnfilled } from '@/lib/schedulerCore';
 import { Save, RefreshCw, ChevronLeft, ChevronRight, User, Users, LayoutGrid, CheckCircle2, GripVertical, Wand2, X, PanelRightClose, PanelRight, AlertTriangle, ShieldAlert, Filter, Ban, CalendarX, Clock4, ShieldCheck, FileSpreadsheet } from 'lucide-react';
 import { addDays, addHours, format, startOfToday, startOfDay, parseISO, isBefore, differenceInMinutes } from 'date-fns';
 import { cn } from "@/lib/utils";
@@ -236,7 +240,7 @@ export default function Scheduler() {
       const [sRes, pRes] = await Promise.all([getSoldiers(), getPosts()]);
       setSoldiers(sRes.data);
       setPosts(pRes.data);
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error(e); notify.error(describeError(e, 'Could not load soldiers and posts.')); }
   };
 
   const fetchDaySlots = async () => {
@@ -264,7 +268,7 @@ export default function Scheduler() {
       }
       
       setIsDraft(false);
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error(e); notify.error(describeError(e, 'Could not load the schedule.')); }
     finally { setLoading(false); }
   };
 
@@ -280,6 +284,14 @@ export default function Scheduler() {
 
   // --- Constraint validation ---
   const warnings = useMemo(() => validateAssignments(shifts, posts, soldiers, unavailabilities), [shifts, posts, soldiers, unavailabilities]);
+  const diagnostics = useMemo(() => {
+    if (loading) return [];
+    const { dayStart, dayEnd } = getDayBounds();
+    const items = diagnoseInputs(posts, soldiers, dayStart, dayEnd);
+    // Only surface per-post chatter when the day is empty; always surface hard errors.
+    return shifts.length === 0 ? items : items.filter(i => i.level === 'error');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [posts, soldiers, shifts, loading, currentDate]);
   const warningMap = useMemo(() => buildWarningMap(warnings), [warnings]);
 
   // Fetch candidates when dialog opens
@@ -309,6 +321,7 @@ export default function Scheduler() {
           setCandidates(data);
         } catch (e) {
           console.error("Error fetching candidates:", e);
+          notify.error(describeError(e, "Could not load suggestions."));
         } finally {
           setLoadingCandidates(false);
         }
@@ -372,8 +385,25 @@ export default function Scheduler() {
         return slot;
       }));
       setIsDraft(true);
+
+      // Tell the user how it went, and why anything stayed empty.
+      const filledNow = shifts.map(slot => {
+        const solved = solverLookup[`${slot.post_name}|${slot.start}|${slot.role_id}`];
+        return solved ? { ...slot, soldier_id: solved.soldier_id } : slot;
+      });
+      if (filledNow.length === 0) {
+        notify.error('There are no shifts to fill for this day. See the explanation above the schedule.');
+      } else {
+        const sum = summarizeUnfilled(filledNow, soldiers, unavailabilities, dayStart, dayEnd);
+        if (sum.unfilled === 0) notify.success(`Assigned all ${sum.total} slots.`);
+        else {
+          const why = Object.entries(sum.reasons).map(([r, n]) => `${n} x ${r}`).join('; ');
+          notify.info(`Assigned ${sum.filled} of ${sum.total} slots. Left empty: ${why}.`);
+        }
+      }
     } catch (error) {
       console.error("Error drafting:", error);
+      notify.error(describeError(error, 'Auto-assign failed.'));
     } finally { setLoading(false); }
   };
 
@@ -397,8 +427,10 @@ export default function Scheduler() {
       await saveSchedule(start, endStr, payload);
       setShifts(prev => prev.map(s => ({ ...s, persisted: s.soldier_id != null })));
       setIsDraft(false);
+      notify.success(`Saved ${payload.length} assignment(s) to the spreadsheet.`);
     } catch (error) {
       console.error("Error saving:", error);
+      notify.error(describeError(error, 'Could not save the schedule. Nothing was changed in the spreadsheet.'));
     } finally { setLoading(false); }
   };
 
@@ -408,17 +440,10 @@ export default function Scheduler() {
       const { dayStart, dayEnd } = getDayBounds();
       const start = format(dayStart, "yyyy-MM-dd'T'HH:mm:ss");
       const endStr = format(dayEnd, "yyyy-MM-dd'T'HH:mm:ss");
-      const response = await exportSchedule(start, endStr);
-      
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `schedule_${format(dayStart, 'yyyyMMdd')}.xlsx`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      await exportSchedule(start, endStr);
     } catch (e) {
       console.error("Export error:", e);
+      notify.error(describeError(e, 'Export failed.'));
     } finally {
       setLoading(false);
     }
@@ -464,7 +489,7 @@ export default function Scheduler() {
         return newShifts;
       });
       setIsDraft(true);
-    } catch (err) { console.error('Drop error:', err); }
+    } catch (err) { console.error('Drop error:', err); notify.error(describeError(err, 'Could not assign that person.')); }
   };
 
   const handleUnassign = (slotIndex) => {
@@ -687,6 +712,8 @@ export default function Scheduler() {
       <div className="flex flex-1 min-h-0 gap-4">
         {/* Main Content Area */}
         <div className="flex-1 flex flex-col min-w-0">
+
+        <DiagnosticsBanner items={diagnostics} />
 
         {/* Warning Banner */}
         {warningCount > 0 && (

@@ -5,6 +5,8 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { useConfirm } from '@/lib/notify';
+import { describeError } from '@/lib/errors';
+import { SheetHealthCard } from '@/components/SheetHealth';
 import { Save, ExternalLink, Info } from 'lucide-react';
 
 export default function Settings() {
@@ -13,14 +15,28 @@ export default function Settings() {
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setIsSaving(true);
     try {
-      gsheetsService.setSpreadsheetId(spreadsheetId);
+      // Accept a pasted URL as well as a bare ID.
+      const match = spreadsheetId.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      const id = (match ? match[1] : spreadsheetId).trim();
+      if (!/^[a-zA-Z0-9_-]{20,}$/.test(id)) {
+        setMessage({ type: 'error', text: 'That does not look like a spreadsheet ID or link.' });
+        return;
+      }
+      const previous = gsheetsService.getSpreadsheetId();
+      gsheetsService.setSpreadsheetId(id);
+      try {
+        await gsheetsService.getHealth();
+      } catch (err) {
+        gsheetsService.setSpreadsheetId(previous);
+        setMessage({ type: 'error', text: describeError(err, 'Could not open that spreadsheet.') });
+        return;
+      }
+      setSpreadsheetId(id);
       setMessage({ type: 'success', text: 'Settings saved successfully!' });
       setTimeout(() => setMessage({ type: '', text: '' }), 3000);
-    } catch (error) {
-      setMessage({ type: 'error', text: 'Failed to save settings.' });
     } finally {
       setIsSaving(false);
     }
@@ -111,6 +127,8 @@ export default function Settings() {
           </Button>
         </CardFooter>
       </Card>
+
+      <SheetHealthCard />
 
       <Card className="border-border/50 bg-card/50 backdrop-blur-sm opacity-60">
         <CardHeader>

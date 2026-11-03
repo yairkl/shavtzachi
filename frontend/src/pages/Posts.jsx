@@ -1,4 +1,6 @@
 import { notify, useConfirm } from '@/lib/notify';
+import { describeError } from '@/lib/errors';
+import { ImportReport } from '@/components/SheetHealth';
 import React, { useEffect, useState, useRef } from 'react';
 import { getPosts, createPost, updatePost, deletePost, exportPosts, importPosts, getSkills } from '@/services/api';
 import { DateTimeRangePicker } from '@/components/DateTimeRangePicker';
@@ -27,6 +29,7 @@ import {
 
 export default function Posts() {
   const confirm = useConfirm();
+  const [importReport, setImportReport] = useState(null);
   const [posts, setPosts] = useState([]);
   const [availableSkills, setAvailableSkills] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -61,6 +64,7 @@ export default function Posts() {
       setAvailableSkills(skillsData);
     } catch (error) {
       console.error("Error fetching data:", error);
+      notify.error(describeError(error, "Could not load posts."));
     } finally {
       setLoading(false);
     }
@@ -81,10 +85,11 @@ export default function Posts() {
         setLoading(true);
         const { data } = await importPosts(file);
         fetchData();
-        notify.success(`Imported ${data.imported} new post(s).`);
+        if (data.issues.some(i => i.level !== 'info') || data.skipped) setImportReport({ ...data, kind: 'post(s)' });
+        else notify.success(`Imported ${data.imported} new post(s).`);
     } catch (e) {
         console.error("Import failed", e);
-        notify.error("Import failed. Check the file format (CSV/XLSX with a header row).");
+        notify.error(`Import failed: ${describeError(e, "check the file format (CSV/XLSX with a header row).")}`);
     } finally {
         setLoading(false);
         e.target.value = null;
@@ -165,12 +170,12 @@ export default function Posts() {
         else await createPost(finalData);
         setIsDialogOpen(false);
         fetchData();
-    } catch (error) { console.error("Error saving post:", error); }
+    } catch (error) { console.error("Error saving post:", error); notify.error(describeError(error, "Could not save the post.")); }
   };
 
   const handleDelete = async (name) => {
     if (!(await confirm({ title: "Delete post?", description: "This cannot be undone.", confirmText: "Delete", destructive: true }))) return;
-    try { await deletePost(name); fetchData(); } catch (error) { console.error(error); }
+    try { await deletePost(name); fetchData(); } catch (error) { console.error(error); notify.error(describeError(error, "Delete failed.")); }
   };
 
   return (
@@ -347,6 +352,7 @@ export default function Posts() {
             </DialogFooter>
         </DialogContent>
       </Dialog>
+      <ImportReport report={importReport} onClose={() => setImportReport(null)} />
     </div>
   );
 }
