@@ -34,7 +34,7 @@ export default defineConfig([
   },
   {
     // Node-side files: build config and Playwright tests.
-    files: ['e2e/**', 'vite.config.js'],
+    files: ['e2e/**', 'vite.config.js', 'src/tests/googleContract.test.js', 'src/tests/live/**'],
     languageOptions: { globals: globals.node },
   },
 ])
