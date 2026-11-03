@@ -130,3 +130,31 @@ test('Settings can format the sheets for editing, without touching the data', as
   assert.deepEqual(s.problems, []);
   await s.context.close();
 });
+
+test('Excel export of a saved schedule downloads a real file, and the soldiers CSV round-trips', async () => {
+  const XLSX = (await import('xlsx')).default;
+  const { readFileSync } = await import('node:fs');
+  const s = await app.open(messySheet());
+  await s.go('/scheduler');
+  await s.page.getByRole('button', { name: /Auto Assign/ }).click();
+  await s.toast(/Assigned all/);
+  await s.page.getByRole('button', { name: /Save/ }).first().click();
+  await s.toast(/Saved \d+ assignment/);
+
+  const [download] = await Promise.all([s.page.waitForEvent('download'), s.page.getByRole('button', { name: /Excel/ }).click()]);
+  assert.match(download.suggestedFilename(), /^schedule_\d{4}-\d{2}-\d{2}\.xlsx$/);
+  const wb = XLSX.read(readFileSync(await download.path()));
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+  assert.ok(rows.length >= 5, `expected the saved assignments, got ${rows.length}`);
+  assert.deepEqual(Object.keys(rows[0]), ['Start', 'End', 'Post', 'Role', 'Soldier']);
+
+  await s.go('/soldiers');
+  await s.page.getByText('Dan').first().waitFor();
+  const [csv] = await Promise.all([s.page.waitForEvent('download'), s.page.getByRole('button', { name: /Export/ }).click()]);
+  assert.equal(csv.suggestedFilename(), 'soldiers.csv');
+  const text = readFileSync(await csv.path(), 'utf8');
+  assert.match(text, /Name,Division,Skills,Excluded Posts/);
+  assert.match(text, /Eli,2,"Guard, medic"|Eli,2,"guard, medic"/i);
+  assert.deepEqual(s.problems, []);
+  await s.context.close();
+});

@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 import { gsheetsService } from './gsheetsService';
 import { ensureToken } from './auth';
 import { parseSoldierTable, parsePostTable, normalizeKey } from '../lib/sheetModel';
-import { exportToExcel, exportSoldiersToCSV } from './exportService';
+import { exportToExcel, exportSoldiersToCSV, scheduleRows } from './exportService';
 import { generateShifts, solveShiftAssignmentGreedy, evaluateSoldierFitness, checkManpower as coreCheckManpower } from '../lib/schedulerCore';
 import { parseISO, format, addDays } from 'date-fns';
 
@@ -175,16 +175,12 @@ export const saveSchedule = (startDate, endDate, assignments) => {
 };
 
 export const exportSchedule = async (startDate, endDate) => {
-  const assignments = await gsheetsService.getAssignmentsInRange(startDate, endDate);
-  const data = assignments.map(a => ({
-      Soldier: a.soldier_name,
-      Post: a.post_name,
-      Start: format(parseISO(a.start), 'yyyy-MM-dd HH:mm'),
-      End: format(parseISO(a.end), 'yyyy-MM-dd HH:mm'),
-      Role: a.role_id
-  }));
-  exportToExcel(data, `schedule_${startDate}`);
-  return;
+  const [assignments, posts] = await Promise.all([
+    gsheetsService.getAssignmentsInRange(startDate, endDate),
+    gsheetsService.getPosts(),
+  ]);
+  if (!assignments.length) throw new Error('There is nothing to export: no saved assignments in this period. Save the schedule first.');
+  exportToExcel(scheduleRows(assignments, posts), `schedule_${String(startDate).slice(0, 10)}`, 'Schedule');
 };
 
 // CSV API
@@ -239,7 +235,7 @@ export const exportPosts = async () => {
           Intensity: p.intensity_weight,
           Slots: p.slots.map(s => s.skill).join(',')
       }));
-      exportToExcel(data, "posts");
+      exportToExcel(data, "posts", "Posts");
       return;
 };
 
