@@ -402,3 +402,49 @@ describe('FakeSheets sanity', () => {
     await expect(f.put("/id/values/'T'!A1", { values: [['a', 'b', 'c']] })).rejects.toThrow(/exceeds grid/);
   });
 });
+
+describe('sheets written by earlier versions of the app / other tools', () => {
+  it('reads the layout the original app created (1/0 flags, 05:59 end times, ISO strings, 4h schedule grid)', async () => {
+    const { service } = await makeService({
+      Soldiers: [H.Soldiers, ['Dan', '1', 'guard,medic', 'Tower'], ['Eli', '', 'guard', ''], ['Avi', '2', 'guard', '']],
+      Posts: [H.Posts, ['Gate', '4', '06:00', '05:59', '8', '1.5', 'guard,guard', '1', '', ''], ['Tower', '6', '06:00', '05:59', '0', '1', 'medic', '0', '', '']],
+      Unavailabilities: [H.Unavailabilities, ['Dan', '2025-03-10T08:00:00', '2025-03-10T12:00:00', 'Doctor']],
+      Schedule: [['Date', 'Time', 'Gate', ''], ['', '', 'Role 1', 'Role 2'], ['09/03/2025', '06:00 - 10:00', 'Eli', 'Avi'], ['', '10:00 - 14:00', 'Eli', 'Avi']],
+    });
+    const posts = await service.getPosts();
+    expect(posts.map((p) => [p.name, p.is_active, p.slots.length])).toEqual([['Gate', true, 2], ['Tower', false, 1]]);
+    const { shifts, assignments } = await draft(service);
+    expect(shifts.length).toBeGreaterThan(0);
+    expect(assignments.length).toBe(shifts.length * 2); // Gate has two slots per shift
+    expect((await service.getAssignmentsInRange('2025-03-09T00:00:00', '2025-03-10T00:00:00')).map((a) => a.soldier_name).sort()).toEqual(['Avi', 'Eli']);
+  });
+
+  it.each([
+    [['Name', 'Shift Length (hours)', 'Start Time', 'End Time', 'Cooldown (hours)', 'Intensity Weight', 'Required Skills', 'Active'], 'parenthesised units'],
+    [['post_name', 'shift_length_hours', 'start_time', 'end_time', 'cooldown_hours', 'intensity_weight', 'slots', 'is_active'], 'snake_case'],
+    [['NAME *', 'Shift length in hours', 'Start time', 'End time', 'Cooldown', 'Intensity', 'Skills needed per shift (slots)', 'Is active?'], 'decorated headers'],
+  ])('recognises header variants: %j (%s)', async (header) => {
+    const { service } = await makeService({
+      Soldiers: [H.Soldiers, ...people(3)],
+      Posts: [header, ['Gate', '8', '06:00', '18:00', '0', '1', 'guard, guard', 'TRUE']],
+      Unavailabilities: [H.Unavailabilities],
+    });
+    const post = (await service.getPosts())[0];
+    expect(post).toMatchObject({ name: 'Gate', shift_length_hours: 8, start_time: '06:00', end_time: '18:00', is_active: true });
+    expect(post.slots).toHaveLength(2);
+  });
+
+  it('builds a diagnostic report with headers, mapping and problems but no people names', async () => {
+    const { service } = await makeService({
+      Soldiers: [H.Soldiers, ['Secret Person', '1', 'guard', '']],
+      Posts: [['Name', 'Weird Column', 'Slots'], ['Gate', 'x', 'sniper']],
+      Unavailabilities: [H.Unavailabilities],
+    });
+    const report = await service.getDiagnosticReport();
+    expect(report).toContain('## Posts');
+    expect(report).toContain('"Weird Column"');
+    expect(report).toContain('columns understood');
+    expect(report).toMatch(/requires skill "sniper"/);
+    expect(report).not.toContain('Secret Person');
+  });
+});

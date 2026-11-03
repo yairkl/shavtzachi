@@ -44,7 +44,12 @@ export const COLUMN_SPECS = {
 
 const clean = (v) => (v === undefined || v === null ? '' : String(v).trim());
 
-export const normalizeHeader = (h) => clean(h).toLowerCase().replace(/[_\-.]+/g, ' ').replace(/\s+/g, ' ');
+// "Shift Length (hours)" -> "shift length"; "start_time" -> "start time"
+export const normalizeHeader = (h) => clean(h).toLowerCase()
+  .replace(/[([{][^)\]}]*[)\]}]/g, ' ')
+  .replace(/[_\-.:*]+/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
 
 export const normalizeKey = (s) => clean(s).toLowerCase().replace(/\s+/g, ' ');
 
@@ -205,6 +210,13 @@ export function mapColumns(tab, headerRow = []) {
 
   for (const spec of specs) {
     const idx = headers.findIndex((h, i) => !used.has(i) && h && spec.aliases.includes(h));
+    if (idx >= 0) { map[spec.field] = idx; used.add(idx); }
+  }
+
+  // Second pass for headers that only contain an alias ("Shift length in hours", "Required skills list").
+  for (const spec of specs) {
+    if (map[spec.field] !== undefined) continue;
+    const idx = headers.findIndex((h, i) => !used.has(i) && h && spec.aliases.some((a) => a.length >= 4 && (h.startsWith(`${a} `) || h.endsWith(` ${a}`) || h.includes(` ${a} `))));
     if (idx >= 0) { map[spec.field] = idx; used.add(idx); }
   }
 

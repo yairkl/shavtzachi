@@ -243,6 +243,40 @@ export class GSheetsService {
   }
 
   /**
+   * A text report for troubleshooting: what the app found in the spreadsheet and how it read it.
+   * Contains tab headers, column mapping, counts, problems, and the (non-personal) Posts rows.
+   * Names of people are not included.
+   */
+  async getDiagnosticReport() {
+    this.clearCache();
+    const cache = await this.fetchAllData();
+    const health = await this.getHealth();
+    const lines = [];
+    lines.push(`Shavtzachi diagnostic report - ${new Date().toISOString()}`);
+    lines.push(`Spreadsheet locale: ${cache.metadata ? 'see sheet settings' : '?'}  |  tabs: ${cache.metadata.map((m) => m.properties.title).join(', ')}`);
+    lines.push(`Counts: ${JSON.stringify(health.counts)}`);
+    for (const tab of ['Soldiers', 'Posts', 'Unavailabilities']) {
+      const raw = cache.raw[tab];
+      lines.push('', `## ${tab}${raw ? '' : ' (MISSING)'}`);
+      if (!raw) continue;
+      lines.push(`header: ${JSON.stringify(raw[0] || [])}`);
+      lines.push(`columns understood: ${JSON.stringify(cache.model.columns[tab])}`);
+      lines.push(`data rows: ${Math.max(raw.length - 1, 0)}`);
+      if (tab === 'Posts') raw.slice(1, 6).forEach((r, i) => lines.push(`row ${i + 2}: ${JSON.stringify(r)}`));
+    }
+    lines.push('', '## Posts as read');
+    cache.model.posts.slice(0, 8).forEach((p) => lines.push(JSON.stringify({ name: p.name, len: p.shift_length_hours, start: p.start_time, end: p.end_time, active: p.is_active, slots: p.slots.map((s) => s.skill), from: p.active_from, until: p.active_until })));
+    lines.push('', `## Skills held by soldiers: ${JSON.stringify([...new Set(cache.model.soldiers.flatMap((s) => s.skills))])}`);
+    const sch = cache.raw.Schedule;
+    lines.push('', `## Schedule tab: ${sch ? `${sch.length} rows` : 'absent'}`);
+    if (sch) lines.push(`header rows: ${JSON.stringify(sch.slice(0, 2))}`);
+    lines.push('', '## Problems found');
+    health.issues.forEach((i) => lines.push(`- [${i.level}] ${i.sheet || ''}${i.row ? ` row ${i.row}` : ''}: ${i.message}`));
+    if (!health.issues.length) lines.push('(none)');
+    return lines.join('\n');
+  }
+
+  /**
    * Create any missing tabs and missing header columns. Never moves or overwrites existing data.
    * Returns a list of changes it made.
    */

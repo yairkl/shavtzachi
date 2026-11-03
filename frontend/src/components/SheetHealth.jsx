@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertCircle, AlertTriangle, CheckCircle2, Info, Loader2, Paintbrush, RefreshCw, Wrench, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, ClipboardCopy, Info, Loader2, Paintbrush, RefreshCw, Wrench, X } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { gsheetsService } from '@/services/gsheetsService';
@@ -95,6 +95,23 @@ export function SheetHealthCard({ compact = false }) {
     }
   };
 
+  const copyReport = async () => {
+    setBusy(true);
+    try {
+      const text = await gsheetsService.getDiagnosticReport();
+      try {
+        await navigator.clipboard.writeText(text);
+        notify.success('Diagnostic report copied. Paste it into the chat.');
+      } catch {
+        window.prompt('Copy this report (Ctrl/Cmd+C):', text);
+      }
+    } catch (e) {
+      notify.error(describeError(e, 'Could not build the report.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const format = async () => {
     const ok = await confirm({
       title: 'Format sheets for editing?',
@@ -169,6 +186,9 @@ export function SheetHealthCard({ compact = false }) {
           </Button>
           <Button variant="outline" size="sm" className="gap-2" onClick={format} disabled={busy} title="Dropdowns, validation, formats and highlighting for editing the sheet by hand. Never changes cell contents.">
             <Paintbrush className="w-4 h-4" /> Format sheets for editing
+          </Button>
+          <Button variant="outline" size="sm" className="gap-2" onClick={copyReport} disabled={busy} title="Copies what the app found in your spreadsheet (no people's names) so problems can be diagnosed.">
+            <ClipboardCopy className="w-4 h-4" /> Copy diagnostic report
           </Button>
         </div>
       </CardContent>
