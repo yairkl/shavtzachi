@@ -1,3 +1,6 @@
+import { notify, useConfirm } from '@/lib/notify';
+import { describeError } from '@/lib/errors';
+import { ImportReport } from '@/components/SheetHealth';
 import React, { useEffect, useState, useRef } from 'react';
 import { getPosts, createPost, updatePost, deletePost, exportPosts, importPosts, getSkills } from '@/services/api';
 import { DateTimeRangePicker } from '@/components/DateTimeRangePicker';
@@ -25,6 +28,8 @@ import {
 } from "@/components/ui/select";
 
 export default function Posts() {
+  const confirm = useConfirm();
+  const [importReport, setImportReport] = useState(null);
   const [posts, setPosts] = useState([]);
   const [availableSkills, setAvailableSkills] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -59,6 +64,7 @@ export default function Posts() {
       setAvailableSkills(skillsData);
     } catch (error) {
       console.error("Error fetching data:", error);
+      notify.error(describeError(error, "Could not load posts."));
     } finally {
       setLoading(false);
     }
@@ -68,15 +74,8 @@ export default function Posts() {
 
   const handleExport = async () => {
     try {
-        const response = await exportPosts();
-        const url = window.URL.createObjectURL(new Blob([response.data]));
-        const link = document.createElement('a');
-        link.href = url;
-        link.setAttribute('download', 'posts.csv');
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-    } catch (e) { console.error("Export failed", e); }
+        await exportPosts();
+    } catch (e) { console.error("Export failed", e); notify.error("Export failed."); }
   };
 
   const handleImport = async (e) => {
@@ -84,12 +83,13 @@ export default function Posts() {
     if (!file) return;
     try {
         setLoading(true);
-        await importPosts(file);
+        const { data } = await importPosts(file);
         fetchData();
-        alert("Import successful!");
+        if (data.issues.some(i => i.level !== 'info') || data.skipped) setImportReport({ ...data, kind: 'post(s)' });
+        else notify.success(`Imported ${data.imported} new post(s).`);
     } catch (e) {
         console.error("Import failed", e);
-        alert("Import failed. Check format.");
+        notify.error(`Import failed: ${describeError(e, "check the file format (CSV/XLSX with a header row).")}`);
     } finally {
         setLoading(false);
         e.target.value = null;
@@ -170,12 +170,12 @@ export default function Posts() {
         else await createPost(finalData);
         setIsDialogOpen(false);
         fetchData();
-    } catch (error) { console.error("Error saving post:", error); }
+    } catch (error) { console.error("Error saving post:", error); notify.error(describeError(error, "Could not save the post.")); }
   };
 
   const handleDelete = async (name) => {
-    if (!confirm(`Are you sure?`)) return;
-    try { await deletePost(name); fetchData(); } catch (error) { console.error(error); }
+    if (!(await confirm({ title: "Delete post?", description: "This cannot be undone.", confirmText: "Delete", destructive: true }))) return;
+    try { await deletePost(name); fetchData(); } catch (error) { console.error(error); notify.error(describeError(error, "Delete failed.")); }
   };
 
   return (
@@ -352,6 +352,7 @@ export default function Posts() {
             </DialogFooter>
         </DialogContent>
       </Dialog>
+      <ImportReport report={importReport} onClose={() => setImportReport(null)} />
     </div>
   );
 }

@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { logout } from '@/services/auth';
 
 const navItems = [
   { icon: BarChart3, label: 'Dashboard', path: '/' },
@@ -84,7 +85,7 @@ export default function Layout({ children }) {
         </nav>
 
         <div className="p-4 border-t border-border mt-auto">
-          <Button variant="ghost" className="w-full justify-start gap-3 text-muted-foreground hover:text-destructive">
+          <Button variant="ghost" onClick={() => { logout(); window.location.reload(); }} className="w-full justify-start gap-3 text-muted-foreground hover:text-destructive">
             <LogOut className="w-5 h-5" />
             Logout
           </Button>

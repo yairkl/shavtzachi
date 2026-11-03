@@ -26,6 +26,14 @@ jobs:
         working-directory: frontend
         run: npm install
 
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Test
+        working-directory: frontend
+        run: npx vitest run
+
       - name: Build
         working-directory: frontend
         run: npm run build
@@ -35,3 +43,5 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./frontend/dist
+          # Keep PR previews (pr-preview/) that live on the same branch.
+          keep_files: true

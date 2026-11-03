@@ -14,13 +14,10 @@ function Calendar({
   classNames,
   showOutsideDays = true,
   captionLayout = "label",
-  buttonVariant = "ghost",
   formatters,
   components,
   ...props
 }) {
-  const defaultClassNames = getDefaultClassNames()
-
   return (
     <DayPicker
       showOutsideDays={showOutsideDays}

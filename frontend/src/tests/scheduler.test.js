@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { generateShifts } from '../lib/schedulerCore';
-import { parseISO } from 'date-fns';
 
 describe('Shift Generation', () => {
   const samplePost = {

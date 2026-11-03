@@ -8,7 +8,10 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest"
+    "test": "vitest",
+    "test:live": "vitest run src/tests/live/googleLive.test.js",
+    "test:contract": "CONTRACT=1 vitest run src/tests/googleContract.test.js",
+    "test:e2e": "vite build && node --test --test-concurrency=1 \"e2e/**/*.e2e.test.js\""
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -45,6 +48,7 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.4.0",
+    "playwright": "^1.63.0",
     "tailwindcss": "^4.2.2",
     "vite": "^8.0.4",
     "vitest": "^4.1.5"

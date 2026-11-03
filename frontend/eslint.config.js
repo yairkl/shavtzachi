@@ -23,7 +23,18 @@ export default defineConfig([
       },
     },
     rules: {
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      // Capitalised names are components used in JSX (no jsx-uses-vars plugin is installed).
+      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^[A-Z_]' }],
     },
+  },
+  {
+    // shadcn/ui primitives export variant helpers next to components by design.
+    files: ['src/components/ui/**'],
+    rules: { 'react-refresh/only-export-components': 'off' },
+  },
+  {
+    // Node-side files: build config and Playwright tests.
+    files: ['e2e/**', 'vite.config.js', 'src/tests/googleContract.test.js', 'src/tests/live/**'],
+    languageOptions: { globals: globals.node },
   },
 ])

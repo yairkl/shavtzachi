@@ -1,8 +1,6 @@
 import { 
   addDays, 
-  addHours, 
   addSeconds, 
-  differenceInHours, 
   differenceInSeconds, 
   isAfter, 
   isBefore, 
@@ -14,6 +12,9 @@ import {
   startOfDay,
   format
 } from 'date-fns';
+import { timeToMinutes } from './sheetModel';
+
+const isValidDate = (d) => d instanceof Date && !Number.isNaN(d.getTime());
 
 /**
  * Port of Python's generate_shifts
@@ -27,7 +28,16 @@ export function generateShifts(posts, startDate, endDate, includeOverflow = fals
   const startClean = start;
   const endClean = end;
 
+  if (!isValidDate(start) || !isValidDate(end) || !(end > start)) return [];
+
   for (const post of posts) {
+    // Skip posts that cannot produce valid shifts instead of looping forever / throwing.
+    const startMin = timeToMinutes(post.start_time);
+    const endMin = timeToMinutes(post.end_time);
+    if (startMin === null || endMin === null) continue;
+    if (!(post.shift_length_hours > 0) || !Number.isFinite(post.shift_length_hours)) continue;
+    if (!post.slots || post.slots.length === 0) continue;
+
     if (post.active_from && isAfter(parseISO(post.active_from), endClean)) continue;
     if (post.active_until && isBefore(parseISO(post.active_until), startClean)) continue;
 
@@ -58,7 +68,8 @@ export function generateShifts(posts, startDate, endDate, includeOverflow = fals
       let activeStart = setHours(setMinutes(setSeconds(currentDay, 0), postStartM), postStartH);
       let activeEnd;
 
-      if (postStartH >= postEndH) {
+      // Wraps past midnight when the end is not later than the start (compare full minutes, not just hours).
+      if (postStartH * 60 + postStartM >= postEndH * 60 + postEndM) {
         activeEnd = setHours(setMinutes(setSeconds(addDays(currentDay, 1), 0), postEndM), postEndH);
       } else {
         activeEnd = setHours(setMinutes(setSeconds(currentDay, 0), postEndM), postEndH);
@@ -530,4 +541,80 @@ export function checkManpower(startDate, endDate, soldiers, posts) {
   }
 
   return results;
+}
+
+/**
+ * Explain, in plain language, why scheduling a window might produce nothing.
+ * Returns [{ level: 'error' | 'warning' | 'info', message }].
+ */
+export function diagnoseInputs(posts = [], soldiers = [], startDate, endDate) {
+  const out = [];
+  const add = (level, message) => out.push({ level, message });
+
+  if (!soldiers.length) add('error', 'There are no soldiers. Add people on the Soldiers page (or fill the Soldiers sheet).');
+  if (!posts.length) {
+    add('error', 'There are no posts. Add posts on the Posts page (or fill the Posts sheet).');
+    return out;
+  }
+
+  const active = posts.filter((p) => p.is_active);
+  if (!active.length) {
+    add('error', `All ${posts.length} post(s) are inactive. Set "Is Active" to TRUE/1 for the posts you want scheduled.`);
+    return out;
+  }
+
+  const start = typeof startDate === 'string' ? parseISO(startDate) : startDate;
+  const end = typeof endDate === 'string' ? parseISO(endDate) : endDate;
+  const windowOk = isValidDate(start) && isValidDate(end) && end > start;
+
+  const skillSupply = new Set(soldiers.flatMap((s) => (s.skills || []).map((k) => k.toLowerCase())));
+
+  for (const post of active) {
+    if (!post.slots || !post.slots.length) {
+      add('warning', `Post "${post.name}" has no required skills (Slots), so it is skipped.`);
+      continue;
+    }
+    for (const slot of post.slots) {
+      if (slot.skill && !skillSupply.has(slot.skill.toLowerCase())) {
+        add('warning', `Post "${post.name}" needs skill "${slot.skill}" but no soldier has it.`);
+      }
+    }
+    if (windowOk) {
+      const shifts = generateShifts([post], start, end, true);
+      if (!shifts.length) {
+        let why = 'no shift falls inside this day';
+        if (post.active_from && parseISO(post.active_from) >= end) why = `it only becomes active on ${post.active_from.replace('T', ' ')}`;
+        else if (post.active_until && parseISO(post.active_until) <= start) why = `it stopped being active on ${post.active_until.replace('T', ' ')}`;
+        add('info', `Post "${post.name}" has no shifts here: ${why}.`);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * After auto-assignment, summarise the slots that stayed empty and why.
+ * slots: [{ post_name, role_id, skill, soldier_id }]
+ */
+export function summarizeUnfilled(slots = [], soldiers = [], unavailabilities = [], start, end) {
+  const empty = slots.filter((s) => s.soldier_id == null);
+  const reasons = {};
+  const bump = (r) => { reasons[r] = (reasons[r] || 0) + 1; };
+
+  const winStart = typeof start === 'string' ? parseISO(start) : start;
+  const winEnd = typeof end === 'string' ? parseISO(end) : end;
+
+  for (const slot of empty) {
+    const withSkill = soldiers.filter((s) => !slot.skill || (s.skills || []).some((k) => k.toLowerCase() === slot.skill.toLowerCase()));
+    if (!withSkill.length) { bump(`no soldier has the skill "${slot.skill}"`); continue; }
+    const free = withSkill.filter((s) => !unavailabilities.some((u) => {
+      if (u.soldier_name !== s.name) return false;
+      const us = parseISO(u.start_datetime);
+      const ue = parseISO(u.end_datetime);
+      return isValidDate(winStart) && isValidDate(winEnd) && us < winEnd && ue > winStart;
+    }));
+    if (!free.length) { bump('everyone with the required skill is unavailable'); continue; }
+    bump('everyone with the required skill is already on another shift, in cooldown, or excluded from the post');
+  }
+  return { total: slots.length, filled: slots.length - empty.length, unfilled: empty.length, reasons };
 }

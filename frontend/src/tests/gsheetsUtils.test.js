@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parseGrid, buildScheduleRequests } from '../services/gsheetsUtils';
-import { addHours, format, parseISO } from 'date-fns';
+import { format } from 'date-fns';
 
 describe('GSheets Utils - Grid Logic', () => {
   const activePosts = [

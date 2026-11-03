@@ -1,4 +1,6 @@
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import { notify, useConfirm } from '@/lib/notify';
+import { describeError } from '@/lib/errors';
+import React, { useEffect, useState, useMemo } from 'react';
 import { 
   getUnavailabilities, 
   createUnavailability, 
@@ -66,6 +68,7 @@ import { format, parseISO, isAfter, isBefore, startOfToday, addDays, differenceI
 import { DateTimeRangePicker } from '@/components/DateTimeRangePicker';
 
 export default function Unavailability() {
+  const confirm = useConfirm();
   const [records, setRecords] = useState([]);
   const [soldiers, setSoldiers] = useState([]);
   const [availableSkills, setAvailableSkills] = useState([]);
@@ -79,7 +82,6 @@ export default function Unavailability() {
   // Filtering & Sorting
   const [searchTerm, setSearchTerm] = useState('');
   const [skillFilter, setSkillFilter] = useState('all');
-  const [sortBy, setSortBy] = useState('name');
   const [timelineStart, setTimelineStart] = useState(startOfToday());
   
   // Dialog State
@@ -111,6 +113,7 @@ export default function Unavailability() {
       setAvailableSkills(skData);
     } catch (error) {
       console.error("Error fetching data:", error);
+      notify.error(describeError(error, "Could not load unavailabilities."));
     } finally {
       setLoading(false);
     }
@@ -135,6 +138,8 @@ export default function Unavailability() {
       fetchManpowerCheck();
     }, 500);
     return () => clearTimeout(timer);
+  // fetchManpowerCheck reads the current form values, which is what sd/st/ed/et track.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sd, st, ed, et]);
 
   const [dateRange, setDateRange] = useState({
@@ -194,7 +199,7 @@ export default function Unavailability() {
 
   const handleSave = async () => {
     try {
-      if (!formData.soldier_id) return alert("Select a soldier");
+      if (!formData.soldier_id) return notify.error("Select a soldier");
       const finalReason = reasonType === 'regular' ? 'Regular' :
                          reasonType === 'vacation' ? 'Vacation' : 
                          reasonType === 'sickness' ? 'Sickness' : formData.reason;
@@ -210,17 +215,17 @@ export default function Unavailability() {
       setIsDialogOpen(false);
       fetchData();
     } catch (e) {
-      alert(e.response?.data?.detail || "Operation failed");
+      notify.error(describeError(e, "Operation failed"));
     }
   };
 
   const handleDelete = async (id) => {
-    if (!confirm("Remove this unavailability record?")) return;
+    if (!(await confirm({ title: "Remove unavailability?", description: "This record will be deleted.", confirmText: "Remove", destructive: true }))) return;
     try {
       await deleteUnavailability(id);
       setIsDialogOpen(false);
       fetchData();
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error(e); notify.error(describeError(e, "Delete failed.")); }
   };
 
   const handleTimelineClick = (soldierId, e) => {

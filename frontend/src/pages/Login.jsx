@@ -1,4 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
+import { requestToken } from '../services/auth';
+import { notify } from '../lib/notify';
 
 export default function Login({ authStatus, authError }) {
   const [loading, setLoading] = useState(false);
@@ -7,27 +9,15 @@ export default function Login({ authStatus, authError }) {
   const sheetId = authStatus?.sheet_id;
   const sheetUrl = sheetId ? `https://docs.google.com/spreadsheets/d/${sheetId}` : null;
 
-  const handleLogin = () => {
-    if (typeof google === 'undefined') {
-        alert("Google library not loaded yet. Please wait a second and try again.");
-        return;
-    }
+  const handleLogin = async () => {
     setLoading(true);
-    
-    const client = google.accounts.oauth2.initTokenClient({
-      client_id: '164567961502-8kl22d26nc1iekcil8d8pgmk5q9iie6g.apps.googleusercontent.com',
-      scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.readonly',
-      callback: (response) => {
-        if (response.access_token) {
-          localStorage.setItem('google_access_token', response.access_token);
-          window.location.reload();
-        } else {
-          setLoading(false);
-          console.error("Login failed", response);
-        }
-      },
-    });
-    client.requestAccessToken();
+    try {
+      await requestToken({ interactive: true });
+      window.location.reload();
+    } catch (err) {
+      setLoading(false);
+      notify.error(`Sign-in failed: ${err.message}`);
+    }
   };
 
   return (
