@@ -36,9 +36,9 @@ export class FakeSheets {
     Object.entries(tabs).forEach(([title, values]) => this._addSheet(title, values));
   }
 
-  _addSheet(title, values = [], grid = {}) {
+  _addSheet(title, values = [], grid = {}, sheetId) {
     const sheet = {
-      properties: { title, sheetId: this.nextSheetId++, gridProperties: { ...this.defaults, ...grid } },
+      properties: { title, sheetId: sheetId ?? this.nextSheetId++, gridProperties: { ...this.defaults, ...grid } },
       values: values.map((r) => [...r]),
       merges: [],
       conditionalFormats: [],
@@ -148,7 +148,7 @@ export class FakeSheets {
         switch (kind) {
           case 'addSheet': {
             if (this.tab(arg.properties.title)) throw apiError(400, `A sheet with the name "${arg.properties.title}" already exists.`);
-            const s = this._addSheet(arg.properties.title, [], arg.properties.gridProperties || {});
+            const s = this._addSheet(arg.properties.title, [], arg.properties.gridProperties || {}, arg.properties.sheetId);
             replies.push({ addSheet: { properties: JSON.parse(JSON.stringify(s.properties)) } });
             continue;
           }
@@ -171,13 +171,23 @@ export class FakeSheets {
           case 'updateCells': {
             const { startRowIndex = 0, startColumnIndex = 0 } = arg.range;
             arg.rows.forEach((row, ri) => row.values.forEach((cell, ci) => {
-              const v = cell?.userEnteredValue?.stringValue;
+              const v = cell?.userEnteredValue?.stringValue ?? cell?.userEnteredValue?.formulaValue;
               if (v !== undefined) this._write(sheet, startRowIndex + ri, startColumnIndex + ci, v);
               if (cell?.note !== undefined) (sheet.notes ||= {})[`${startRowIndex + ri},${startColumnIndex + ci}`] = cell.note;
             }));
             break;
           }
-          case 'mergeCells': sheet.merges.push({ ...arg.range }); break;
+          case 'mergeCells': {
+            sheet.merges.push({ ...arg.range });
+            // like Google Sheets: only the top-left value of a merged range survives
+            const { startRowIndex, endRowIndex, startColumnIndex, endColumnIndex } = arg.range;
+            for (let r = startRowIndex; r < endRowIndex; r++) {
+              for (let c = startColumnIndex; c < endColumnIndex; c++) {
+                if ((r !== startRowIndex || c !== startColumnIndex) && sheet.values[r]?.[c] !== undefined) sheet.values[r][c] = '';
+              }
+            }
+            break;
+          }
           case 'updateSheetProperties':
             Object.assign(sheet.properties.gridProperties, arg.properties.gridProperties);
             break;

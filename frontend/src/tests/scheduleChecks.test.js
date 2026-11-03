@@ -85,12 +85,9 @@ describe('validateAssignments', () => {
 describe('division colours in the Schedule tab', () => {
   const formulas = (reqs) => reqs.map((r) => r.addConditionalFormatRule.rule.booleanRule.condition.values[0].userEnteredValue);
 
-  it('uses 10 colours and a top-priority double-booking rule', () => {
+  it('uses 10 colours', () => {
     const reqs = buildDivisionColoringRules(5, { title: 'Soldiers', nameCol: 0, divisionCol: 1 });
-    expect(reqs).toHaveLength(DIVISION_COLORS.length + 1);
-    const last = reqs[reqs.length - 1].addConditionalFormatRule;
-    expect(last.index).toBe(0);
-    expect(last.rule.booleanRule.condition.values[0].userEnteredValue).toMatch(/COUNTIF\(\$C3:\$[A-Z]+3,C3\)>1/);
+    expect(reqs).toHaveLength(DIVISION_COLORS.length);
   });
 
   it('follows reordered Soldiers columns and the real tab title', () => {
@@ -106,8 +103,8 @@ describe('division colours in the Schedule tab', () => {
     expect(f[2]).toMatch(/\+1=3\)$/);
   });
 
-  it('without a usable Soldiers tab only the double-booking rule is added', () => {
-    expect(buildDivisionColoringRules(5, null)).toHaveLength(1);
+  it('without a usable Soldiers tab no colour rules are added', () => {
+    expect(buildDivisionColoringRules(5, null)).toHaveLength(0);
   });
 
   it('formulas are well-formed', () => {
@@ -205,7 +202,7 @@ describe('schedule rules in the spreadsheet', () => {
     const { service, fake } = await makeService(tabs({ Soldiers: [['Skills', 'Division', 'Name'], ['guard', '1', 'Dan'], ['guard', '2', 'Eli']] }));
     await service.saveAssignments(d(6).toISOString(), d(22).toISOString(), [asg('Dan', 'Gate', 6, 14)]);
     const rules = fake.tab('Schedule').conditionalFormats.map((r) => r.booleanRule.condition.values[0].userEnteredValue);
-    expect(rules.length).toBe(DIVISION_COLORS.length + 1);
+    expect(rules.length).toBe(DIVISION_COLORS.length + 2); // 10 division colours + the 2 live-check rules
     expect(rules.some((f) => f.includes(`'Soldiers'!$C$2:$C`) && f.includes(`'Soldiers'!$B$2:$B`))).toBe(true);
   });
 });

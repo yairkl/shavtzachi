@@ -32,10 +32,12 @@ The Soldiers, Posts and Unavailabilities tabs are meant to be edited directly in
 
 ### Schedule rules in the sheet
 
-The Schedule tab is coloured by division (10 colours, looked up from the Soldiers tab by header, so reordered columns work). Two things protect against mistakes made while editing it by hand:
+The Schedule tab is coloured by division (10 colours, looked up from the Soldiers tab by header, so reordered columns work). Mistakes made while editing it by hand are caught in two ways:
 
-- **Live:** typing a name that already appears in the same time row turns the cell red immediately (a common double booking).
-- **On demand and on every save:** *Settings -> Spreadsheet health -> Check schedule* (and every Save in the Scheduler) checks all saved assignments for double booking across any overlap, cooldown (the rest between shifts must respect both posts' cooldowns), missing skills, excluded posts, unavailability and people missing from the roster. Problem cells get bold red text and a note explaining why. Marks refresh only when you save or run the check again; they are not live formulas.
+- **Live, in the sheet - for shifts of any duration.** A helper tab, *Schedule Check*, expands every shift over all the rows it covers (using its post's shift length, because merged cells only hold the name in their first row) and flags problems with formulas. In the Schedule tab a cell turns **red** when the same person is on another post at the same time (a 24h shift and a 4h shift are compared correctly) and **amber** when they get less rest than a cooldown allows. Typing a name takes effect immediately. The helper tab is regenerated on every Save and by *Check schedule*; press that if you change a post's shift length or cooldown, or add rows or columns, by hand.
+- **On demand and on every save:** *Settings -> Spreadsheet health -> Check schedule* (and every Save in the Scheduler) checks all saved assignments for double booking, cooldown, missing skills, excluded posts, unavailability and people missing from the roster. Problem cells get bold red text and a note explaining why. These marks refresh only when you save or check again.
+
+Cooldown means the rest needed after finishing a shift of a post: the gap before the next shift must be at least the cooldown of the earlier shift's post. Both shifts of the pair are flagged. The helper formulas are checked in the unit tests with a spreadsheet engine against the app's rule engine on random schedules.
 
 ### Tests
 

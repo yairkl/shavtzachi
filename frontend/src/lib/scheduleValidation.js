@@ -82,7 +82,8 @@ export function validateAssignments(shifts, posts, soldiers, unavailabilities = 
         continue;
       }
 
-      // The rest between consecutive shifts must respect both posts' cooldowns.
+      // Cooldown is the rest needed after finishing a shift of a post: the gap between two consecutive shifts
+      // must be at least the cooldown of the EARLIER shift's post. Both shifts of the pair are reported.
       const gap = (otherStart - slotEnd) / 36e5;          // this shift, then other
       const reverseGap = (slotStart - otherEnd) / 36e5;   // other shift, then this
       if (gap >= 0 && gap < cooldownHours && idx < other.idx) {

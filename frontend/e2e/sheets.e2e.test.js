@@ -191,3 +191,37 @@ test('Check schedule finds double booking and cooldown problems typed straight i
   assert.deepEqual(s.problems, []);
   await s.context.close();
 });
+
+test('Check schedule sets up live checks that flag a 24h shift vs a 4h shift of the same person', async () => {
+  const { HyperFormula } = await import('hyperformula');
+  const s = await app.open({
+    Soldiers: [HEAD.Soldiers, ['Dan', '1', 'guard', ''], ['Eli', '2', 'guard', '']],
+    Posts: [HEAD.Posts,
+      ['Fort', '24', '06:00', '06:00', '0', '1', 'guard', 'TRUE', '', ''],
+      ['Gate', '4', '06:00', '06:00', '0', '1', 'guard', 'TRUE', '', ''],
+    ],
+    Unavailabilities: [HEAD.Unavailabilities],
+    Schedule: [
+      ['Date', 'Time', 'Fort', 'Gate'],
+      ['', '', '', ''],
+      ['10/03/2025', '06:00 - 10:00', 'Dan', ''],
+      ['', '10:00 - 14:00', '', ''],
+      ['', '14:00 - 18:00', '', 'Dan'], // inside the 24h Fort shift, on a different row
+      ['', '18:00 - 22:00', '', 'Eli'],
+    ],
+  });
+  await s.go('/settings');
+  await s.page.getByText(/Found 2 soldier/).waitFor();
+  await s.page.getByRole('button', { name: /Check schedule/ }).click();
+  await s.page.getByText(/double-booked/).first().waitFor();
+  assert.ok(s.fake.tab('Schedule Check'), 'helper tab was created');
+  assert.equal(s.fake.tab('Schedule').conditionalFormats.length, 2, 'red/amber live rules are on the Schedule tab');
+
+  const hf = HyperFormula.buildFromSheets({ Schedule: s.fake.rows('Schedule'), 'Schedule Check': s.fake.rows('Schedule Check') }, { licenseKey: 'gpl-v3' });
+  const helper = s.fake.rows('Schedule Check');
+  const label = helper.findIndex((r) => r[0] === 'Problems (D, C)');
+  const flags = hf.getSheetValues(hf.getSheetId('Schedule Check')).slice(label, label + 4).map((r) => r.slice(2, 4));
+  assert.deepEqual(flags, [['D', ''], ['', ''], ['', 'D'], ['', '']]);
+  assert.deepEqual(s.problems, []);
+  await s.context.close();
+});

@@ -266,14 +266,12 @@ const a1col = (i) => { let n = i + 1; let s = ''; while (n > 0) { const r = (n -
 /**
  * Conditional formatting for the Schedule tab:
  *  - a fill colour per division (looked up from the Soldiers tab by name; division n uses colour ((n-1) mod 10)+1)
- *  - a red fill, with top priority, when the same person appears twice in one time row (a double booking you just typed)
  * The Soldiers tab and its Name/Division columns are located by header, so reordered columns still work.
- * `soldiers` = { title, nameCol, divisionCol } (0-based column indexes); without both columns only the double-booking rule is added.
+ * `soldiers` = { title, nameCol, divisionCol } (0-based column indexes); without both columns no rules are added.
  */
 export function buildDivisionColoringRules(sheetId, soldiers = { title: 'Soldiers', nameCol: 0, divisionCol: 1 }, grid = { rowCount: 1000, columnCount: 100 }) {
   const requests = [];
   const range = { sheetId, startRowIndex: 2, endRowIndex: Math.max(grid.rowCount || 1000, 3), startColumnIndex: 2, endColumnIndex: Math.max(grid.columnCount || 100, 3) };
-  const lastCol = a1col(range.endColumnIndex - 1);
 
   if (soldiers && soldiers.nameCol !== undefined && soldiers.divisionCol !== undefined) {
     const q = String(soldiers.title).replace(/'/g, "''");
@@ -295,19 +293,6 @@ export function buildDivisionColoringRules(sheetId, soldiers = { title: 'Soldier
     });
   }
 
-  // Highest priority: the same name twice in one row.
-  requests.push({
-    addConditionalFormatRule: {
-      rule: {
-        ranges: [range],
-        booleanRule: {
-          condition: { type: 'CUSTOM_FORMULA', values: [{ userEnteredValue: `=AND(LEN(C3)>0,COUNTIF($C3:$${lastCol}3,C3)>1)` }] },
-          format: { backgroundColor: { red: 0.96, green: 0.78, blue: 0.78 }, textFormat: { bold: true } },
-        },
-      },
-      index: 0,
-    },
-  });
   return requests;
 }
 
@@ -337,22 +322,16 @@ export function buildViolationMarkRequests(sheetId, marks, grid = { rowCount: 10
 }
 
 /**
- * Port of parse_grid
+ * Which post and role each column of the Schedule tab belongs to.
+ * Row 1 holds the post name (merged over its roles), row 2 the role labels. Google trims trailing blank
+ * cells per row, so the header row can be shorter than the data: the width comes from the longest row.
+ * Returns { colIndex: { name, role_id } }.
  */
-export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHours = 1) {
-  if (!gridRows || gridRows.length < 3) return [];
-
-  const mergeMap = {};
-  merges.forEach(m => {
-    mergeMap[`${m.startRowIndex}-${m.startColumnIndex}`] = m.endRowIndex;
-  });
-
+export function mapScheduleColumns(gridRows) {
   const val = (r, c) => gridRows[r]?.[c]?.toString().trim() || "";
-
   const colToPost = {};
-  let c = 2;
-  // Google trims trailing blank cells per row, so the header row can be shorter than the data.
   const width = Math.max(0, ...gridRows.map((row) => (row ? row.length : 0)));
+  let c = 2;
   while (c < width) {
     const pName = val(0, c);
     if (pName) {
@@ -369,6 +348,23 @@ export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHou
       c++;
     }
   }
+  return colToPost;
+}
+
+/**
+ * Port of parse_grid
+ */
+export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHours = 1) {
+  if (!gridRows || gridRows.length < 3) return [];
+
+  const mergeMap = {};
+  merges.forEach(m => {
+    mergeMap[`${m.startRowIndex}-${m.startColumnIndex}`] = m.endRowIndex;
+  });
+
+  const val = (r, c) => gridRows[r]?.[c]?.toString().trim() || "";
+
+  const colToPost = mapScheduleColumns(gridRows);
 
   const rowToDt = {};
   const rowStep = {}; // minutes per row, from the Time column label
@@ -417,8 +413,16 @@ export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHou
           }
           currR = endRow;
         } else {
-          currR = r + 1;
-          endDt = addMinutes(rowToDt[r], stepOf(r));
+          // Not merged (typed by hand): the shift lasts as long as its post's shift length, but never runs into
+          // the next filled cell of the same column or past the last row.
+          let span = 1;
+          const post = (activePosts || []).find((p) => String(p.name).trim().toLowerCase() === postInfo.name.toLowerCase());
+          if (post && post.shift_length_hours > 0) {
+            const want = Math.max(1, Math.round((post.shift_length_hours * 60) / stepOf(r)));
+            while (span < want && r + span < gridRows.length && !val(r + span, cIdx) && rowToDt[r + span]) span++;
+          }
+          currR = r + span;
+          endDt = addMinutes(rowToDt[r], span * stepOf(r));
         }
 
         assignments.push({

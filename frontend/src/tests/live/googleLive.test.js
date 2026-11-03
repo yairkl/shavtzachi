@@ -14,7 +14,9 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import axios from 'axios';
 import { GSheetsService } from '../../services/gsheetsService';
+import { HyperFormula } from 'hyperformula';
 import { makeService } from '../helpers/fakeSheets';
+import { CHECK_TAB } from '../../services/liveChecks';
 import { generateShifts, solveShiftAssignmentGreedy } from '../../lib/schedulerCore';
 
 const TOKEN = process.env.GOOGLE_ACCESS_TOKEN;
@@ -23,7 +25,7 @@ const MODE = TOKEN ? 'live' : (process.env.LIVE_DRYRUN ? 'fake' : null);
 const DAY = ['2025-03-10T06:00:00', '2025-03-11T06:00:00'];
 
 describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
-  let service; let id;
+  let service; let id; let fake;
 
   const put = (range, values) => service.client.put(`/${id}/values/${range}?valueInputOption=USER_ENTERED`, { values });
 
@@ -32,7 +34,7 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
       service = new GSheetsService();
       service.setAccessToken(TOKEN);
     } else {
-      ({ service } = await makeService({}));
+      ({ service, fake } = await makeService({}));
     }
     service.CACHE_TTL = 0;
     id = await service.createSpreadsheet(`Shavtzachi live test ${new Date().toISOString()}`);
@@ -78,6 +80,22 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
     const health = await service.getHealth();
     expect(health.issues.filter((i) => i.level === 'error')).toEqual([]);
   }, 60000);
+
+
+  /** The FLAGS layer of the helper tab as the spreadsheet computes it (Google for real, a formula engine in dry-run). */
+  const computedFlags = async () => {
+    service.clearCache();
+    let rows;
+    if (MODE === 'live') {
+      rows = await service.fetchSheetValues(`'${CHECK_TAB}'!A1:Z600`);
+    } else {
+      const hf = HyperFormula.buildFromSheets({ Schedule: fake.rows('Schedule'), [CHECK_TAB]: fake.rows(CHECK_TAB) }, { licenseKey: 'gpl-v3' });
+      rows = hf.getSheetValues(hf.getSheetId(CHECK_TAB)).map((r) => r.map((v) => (v === null || v === undefined ? '' : String(v))));
+    }
+    const label = rows.findIndex((r) => r[0] === 'Problems (D, C)');
+    expect(label).toBeGreaterThan(0);
+    return rows.slice(label).flatMap((r) => r.slice(2)).filter((v) => v === 'D' || v === 'C');
+  };
 
   const draft = async (win = DAY) => {
     const soldiers = await service.getSoldiers();
@@ -166,6 +184,9 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
     const clash = (role) => ({ soldier_name: 'Dan', post_name: 'Gate', role_id: role, start: '2025-03-25T06:00:00', end: '2025-03-25T14:00:00' });
     const saved = await service.saveAssignments(day[0], day[1], [clash(0), clash(1)]);
     expect(saved.violations.some((v) => v.type === 'overlap')).toBe(true);
+    expect(saved.liveChecks.ok).toBe(true);
+    // the formulas are evaluated by the spreadsheet: both clashing cells are flagged
+    expect((await computedFlags()).filter((f) => f === 'D').length).toBeGreaterThanOrEqual(2);
     const { metadata } = await service.fetchAllData();
     const schedule = metadata.find((m) => m.properties.title === 'Schedule');
     expect(schedule.conditionalFormats.length).toBeGreaterThanOrEqual(11); // 10 division colours + double-booking rule
@@ -174,6 +195,18 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
     // a clean save removes the marks again
     await service.saveAssignments(day[0], day[1], []);
     expect((await service.checkSchedule()).violations.filter((v) => v.start && new Date(v.start) >= new Date(day[0]) && new Date(v.start) < new Date(day[1]))).toEqual([]);
+  }, 120000);
+
+  it('flags a double booking between shifts of different durations (12h Clinic vs 8h Gate starting on other rows)', async () => {
+    const day = ['2025-03-27T00:00:00', '2025-03-28T00:00:00'];
+    await service.saveAssignments(day[0], day[1], [
+      { soldier_name: 'Gil', post_name: 'Clinic', role_id: 0, start: '2025-03-27T00:00:00', end: '2025-03-27T12:00:00' },
+      { soldier_name: 'Gil', post_name: 'Gate', role_id: 0, start: '2025-03-27T06:00:00', end: '2025-03-27T14:00:00' },
+      { soldier_name: 'Dan', post_name: 'Gate', role_id: 1, start: '2025-03-27T06:00:00', end: '2025-03-27T14:00:00' },
+    ]);
+    const flags = await computedFlags();
+    expect(flags.filter((f) => f === 'D')).toHaveLength(2); // Gil on both, Dan fine
+    await service.saveAssignments(day[0], day[1], []);
   }, 120000);
 
   it('grows the grid for a schedule wider than the default 26 columns', async () => {
