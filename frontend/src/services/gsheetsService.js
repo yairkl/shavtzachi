@@ -4,6 +4,7 @@ import { notify } from '../lib/notify';
 import { buildFormattingRequests, isOurRule } from './sheetFormatting';
 import { parseGrid, buildScheduleRequests, buildDivisionColoringRules, buildViolationMarkRequests } from './gsheetsUtils';
 import { validateAssignments } from '../lib/scheduleValidation';
+import { generateShifts } from '../lib/schedulerCore';
 import { DAY_TAB, OUT_FIRST_ROW, planDayView, buildDayViewCells, dayViewSize, daysColumn, layerRows, dayKey, dayRanges, dayName, MAX_JUMP_DAYS } from './dayView';
 import { CHECK_TAB, planLiveChecks, buildLiveCheckCells, buildLiveCheckRules, isLiveCheckRule, estimateSize, MAX_FORMULA_CHARS } from './liveChecks';
 import { TABS, COLUMN_SPECS, buildModel, mapColumns, composeRow, colLetter, normalizeKey, toSheetDateTime } from '../lib/sheetModel';
@@ -701,8 +702,27 @@ export class GSheetsService {
       if (isBefore(aStart, fullStart)) fullStart = aStart;
       if (isAfter(aEnd, fullEnd)) fullEnd = aEnd;
     });
+    // The grid also covers the whole day being saved, so its empty slots are part of it. (A save that only rewrites
+    // the existing schedule, with a window that touches nothing, must not stretch the grid.)
+    const windowMatters = prepared.length > 0 || (saveStart.getTime() < fullEnd.getTime() && saveEnd.getTime() > fullStart.getTime());
+    if (windowMatters) {
+      if (isBefore(saveStart, fullStart)) fullStart = saveStart;
+      if (isAfter(saveEnd, fullEnd)) fullEnd = saveEnd;
+    }
 
-    const built = buildScheduleRequests(sheetId, combined, fullStart, fullEnd);
+    // Every shift slot of the period, filled or not: empty slots are merged to the shift length too, so picking a
+    // name in an empty slot fills the whole shift. (Too irregular a timetable falls back to assignments only.)
+    const activePosts = (await this.fetchAllData()).model.posts.filter((p) => p.is_active);
+    const tooLong = fullEnd.getTime() - fullStart.getTime() > 400 * 24 * 3600 * 1000; // keep generating slots bounded
+    const slots = tooLong ? [] : generateShifts(activePosts, fullStart, fullEnd, true)
+      .flatMap((sh) => sh.post.slots.map((sl) => ({ post_name: sh.post_name, role_id: sl.role_index, start: sh.start, end: sh.end })));
+    let built;
+    try {
+      built = buildScheduleRequests(sheetId, combined, fullStart, fullEnd, null, { slots });
+    } catch (e) {
+      if (!/too long a period/.test(e.message)) throw e;
+      built = buildScheduleRequests(sheetId, combined, fullStart, fullEnd);
+    }
     if (built.length === 0) return;
     // Never write a schedule that silently lost assignments.
     if (built.stats && built.stats.skipped > 0) {

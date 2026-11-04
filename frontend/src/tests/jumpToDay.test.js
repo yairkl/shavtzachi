@@ -119,18 +119,18 @@ describe('jumping around a long schedule', () => {
     expect(fake.namedRanges.some((n) => n.name === 'My_Range')).toBe(true);
   });
 
-  it('works for a 100-day schedule: every day linked, the most recent shortcuts kept, nothing breaks', async () => {
+  it('works for a 120-day schedule: every day linked, the most recent shortcuts kept, nothing breaks', async () => {
     const { service, fake } = await makeService(tabs());
     await service.saveAssignments(new Date(2025, 0, 1).toISOString(), new Date(2025, 4, 1).toISOString(), hundredDays());
     const grid = fake.rows('Schedule');
     const days = dayRanges(grid);
-    expect(days).toHaveLength(100);
-    expect(fake.namedRanges).toHaveLength(Math.min(100, MAX_JUMP_DAYS));
+    expect(days).toHaveLength(120); // the saved window (Jan 1 - May 1) is the grid: empty days are rows too
+    expect(fake.namedRanges).toHaveLength(Math.min(120, MAX_JUMP_DAYS));
     const links = fake.rows(DAY_TAB).flat().filter((c) => typeof c === 'string' && /^=HYPERLINK\("#gid=\d+&range=A\d+","\d{4}-\d{2}-\d{2}"\)$/.test(c));
-    expect(links).toHaveLength(100);
+    expect(links).toHaveLength(120);
     // the last link leads to the last day
-    expect(links[99]).toContain(`range=A${days[99].startRow}`);
-    expect(links[99]).toContain(days[99].day);
+    expect(links[119]).toContain(`range=A${days[119].startRow}`);
+    expect(links[119]).toContain(days[119].day);
   });
 
   it('scheduleDayUrl opens the Schedule tab at the first row of the day', async () => {

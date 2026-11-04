@@ -34,9 +34,12 @@ export function chooseStepMinutes(assignments, origin) {
 /**
  * Port of build_schedule_requests.
  * timeGranularityHours: fixed row height in hours, or omit/null to choose one that fits all shifts.
- * The returned array has a `stats` property: { written, skipped }.
+ * options.slots: every shift slot of the period [{ post_name, role_id, start, end }], filled or not. Empty slots are
+ * written as empty, merged blocks of the post's shift length (so picking a name in one fills the whole shift), and their
+ * boundaries count when the row height is chosen. Only slots that fit the grid exactly are used.
+ * The returned array has `stats` { written, skipped, emptySlots }, `placements` (assignments) and `slotPlacements` (empty slots).
  */
-export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDate, timeGranularityHours = null) {
+export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDate, timeGranularityHours = null, options = {}) {
   const sheetId = parseInt(sheetIdRaw);
   if (!assignments.length && !startDate) return [];
 
@@ -45,7 +48,16 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
   const end = typeof endDate === 'string' ? parseISO(endDate) : endDate;
 
   let current_time = startOfHour(start);
-  const stepMinutes = timeGranularityHours ? Math.round(timeGranularityHours * 60) : chooseStepMinutes(assignments, current_time);
+  const asDate = (v) => (typeof v === 'string' ? parseISO(v) : v);
+  // empty slots that lie completely inside the period
+  let slotsInside = (options.slots || []).filter((sl) => {
+    const s = asDate(sl.start); const e = asDate(sl.end);
+    return s.getTime() >= current_time.getTime() && e.getTime() <= end.getTime();
+  });
+  // Empty blocks are only worth it while rows stay readable: shifts that force rows shorter than 15 minutes
+  // (e.g. a post with 6-minute shifts) would make the sheet huge, so they are left out.
+  if (!timeGranularityHours && slotsInside.length && chooseStepMinutes([...assignments, ...slotsInside], current_time) < 15) slotsInside = [];
+  const stepMinutes = timeGranularityHours ? Math.round(timeGranularityHours * 60) : chooseStepMinutes([...assignments, ...slotsInside], current_time);
 
   const time_steps = [];
   let temp_time = current_time;
@@ -63,11 +75,11 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
   });
 
   // 2. Map Columns
-  const unique_posts = [...new Set(assignments.map(a => a.post_name))].sort();
+  const unique_posts = [...new Set([...assignments, ...slotsInside].map(a => a.post_name))].sort();
   const roles_per_post = {};
-  assignments.forEach(a => {
+  [...assignments, ...slotsInside].forEach(a => {
     if (!roles_per_post[a.post_name]) roles_per_post[a.post_name] = new Set();
-    roles_per_post[a.post_name].add(a.role_id);
+    roles_per_post[a.post_name].add(Number(a.role_id));
   });
 
   const post_to_cols = {};
@@ -168,6 +180,7 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
   let written = 0;
   let skipped = 0;
   const placements = [];
+  const occupied = {}; // column -> [[startRow, endRow)] used by assignments
   assignments.forEach(a => {
     const p_name = a.post_name;
     const r_id = Number(a.role_id);
@@ -203,8 +216,32 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
       merges.push({ sheetId, startRowIndex: start_row, endRowIndex: end_row, startColumnIndex: col, endColumnIndex: col + 1 });
     }
     placements.push({ assignment: a, row: start_row, col });
+    (occupied[col] ||= []).push([start_row, end_row]);
     written++;
   });
+
+  // Empty slots: merged, empty, lightly shaded blocks of the post's shift length (never over an assignment).
+  const slotPlacements = [];
+  const EMPTY_FILL = { red: 0.98, green: 0.98, blue: 0.94 };
+  const rowOf = (d) => {
+    for (let i = 0; i < time_steps.length; i++) if (time_steps[i].getTime() === d.getTime()) return i;
+    return -1;
+  };
+  for (const sl of slotsInside) {
+    const col = post_to_cols[sl.post_name]?.find(pc => pc.role_id === Number(sl.role_id))?.col;
+    const s = asDate(sl.start); const e = asDate(sl.end);
+    const startIdx = rowOf(s);
+    let endIdx = rowOf(e);
+    if (endIdx === -1 && time_steps.length && addMinutes(time_steps[time_steps.length - 1], stepMinutes).getTime() === e.getTime()) endIdx = time_steps.length;
+    if (col === undefined || startIdx === -1 || endIdx === -1 || endIdx <= startIdx) continue;
+    const start_row = startIdx + 2;
+    const end_row = endIdx + 2;
+    if ((occupied[col] || []).some(([a, b]) => start_row < b && end_row > a)) continue; // an assignment is already there
+    for (let r = start_row; r < end_row; r++) set_cell(r, col, get_cell('', false, EMPTY_FILL));
+    if (end_row > start_row + 1) merges.push({ sheetId, startRowIndex: start_row, endRowIndex: end_row, startColumnIndex: col, endColumnIndex: col + 1 });
+    (occupied[col] ||= []).push([start_row, end_row]);
+    slotPlacements.push({ slot: sl, row: start_row, col });
+  }
 
   const requests = [];
   requests.push({ unmergeCells: { range: { sheetId, startRowIndex: 0, endRowIndex: 2000, startColumnIndex: 0, endColumnIndex: 200 } } });
@@ -243,7 +280,8 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
     }
   });
 
-  requests.stats = { written, skipped };
+  requests.stats = { written, skipped, emptySlots: slotPlacements.length };
+  requests.slotPlacements = slotPlacements;
   requests.placements = placements; // where each assignment's cell ended up (0-based row/col)
   return requests;
 }
@@ -357,18 +395,8 @@ export function mapScheduleColumns(gridRows) {
 /**
  * Port of parse_grid
  */
-export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHours = 1) {
-  if (!gridRows || gridRows.length < 3) return [];
-
-  const mergeMap = {};
-  merges.forEach(m => {
-    mergeMap[`${m.startRowIndex}-${m.startColumnIndex}`] = m.endRowIndex;
-  });
-
+export function scheduleRowTimes(gridRows, timeGranularityHours = 1) {
   const val = (r, c) => gridRows[r]?.[c]?.toString().trim() || "";
-
-  const colToPost = mapScheduleColumns(gridRows);
-
   const rowToDt = {};
   const rowStep = {}; // minutes per row, from the Time column label
   const stepOf = (r) => (rowStep[r] ?? timeGranularityHours * 60);
@@ -394,6 +422,22 @@ export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHou
       }
     }
   }
+  return { rowToDt, rowStep, stepOf };
+}
+
+/** Port of parse_grid */
+export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHours = 1) {
+  if (!gridRows || gridRows.length < 3) return [];
+
+  const mergeMap = {};
+  merges.forEach(m => {
+    mergeMap[`${m.startRowIndex}-${m.startColumnIndex}`] = m.endRowIndex;
+  });
+
+  const val = (r, c) => gridRows[r]?.[c]?.toString().trim() || "";
+
+  const colToPost = mapScheduleColumns(gridRows);
+  const { rowToDt, stepOf } = scheduleRowTimes(gridRows, timeGranularityHours);
 
   const assignments = [];
   for (const [col, postInfo] of Object.entries(colToPost)) {

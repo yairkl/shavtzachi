@@ -50,7 +50,7 @@ describe('Day View written by the app', () => {
     await service.saveAssignments(at(10, 6), at(12, 6), [asg('Dan', 'Fort', 10, 6, 11, 6), asg('Eli', 'Gate', 11, 6, 11, 10)]);
     const sheet = fake.tab(DAY_TAB);
     expect(sheet).toBeTruthy();
-    expect(fake.rows(DAY_TAB)[0][1]).toMatch(/^2025-03-1[01]$/); // a valid day is selected
+    expect(fake.rows(DAY_TAB)[0][1]).toMatch(/^2025-03-1[012]$/); // a valid day is selected (the saved window covers 10th to 12th)
     const dropdown = sheet.validations.find((v) => v.range.startRowIndex === 0 && v.range.startColumnIndex === 1);
     expect(dropdown.rule.condition.type).toBe('ONE_OF_RANGE');
     expect(dropdown.rule.showCustomUi).toBe(true);
