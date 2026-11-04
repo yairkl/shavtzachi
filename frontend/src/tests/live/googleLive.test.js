@@ -38,7 +38,13 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
       ({ service, fake } = await makeService({}));
     }
     service.CACHE_TTL = 0;
-    id = await service.createSpreadsheet(`Shavtzachi live test ${new Date().toISOString()}`);
+    try {
+      id = await service.createSpreadsheet(`Shavtzachi live test ${new Date().toISOString()}`);
+    } catch (e) {
+      // show Google's own explanation (API not enabled, no permission...), not just the status code
+      const body = e.response?.data;
+      throw new Error(`Could not create the test spreadsheet (HTTP ${e.response?.status}): ${body ? JSON.stringify(body) : e.message}`);
+    }
     // Type values exactly as a person would: Google parses them (TRUE -> checkbox-like boolean, 6:00 -> time, dates -> date cells).
     await put("'Soldiers'!A2", [['Dan', '1', 'guard', ''], ['Eli', '2', 'Guard, medic', ''], ['Avi', '1', 'guard', ''], ['Ben', '2', 'guard', ''], ['Gil', '1', 'medic', '']]);
     await put("'Posts'!A2", [
