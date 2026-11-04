@@ -131,7 +131,8 @@ describe('schedule rules in the spreadsheet', () => {
     ...extra,
   });
   const asg = (soldier_name, post_name, h1, h2, role_id = 0) => ({ soldier_name, post_name, role_id, start: d(h1).toISOString(), end: d(h2).toISOString() });
-  const noteList = (fake) => Object.entries(fake.tab('Schedule').notes || {});
+  // rule-problem notes only: empty slots also carry "who fits" suggestions
+  const noteList = (fake) => Object.entries(fake.tab('Schedule').notes || {}).filter(([, text]) => /^Problem/.test(text));
 
   it('saving marks every problem cell with a note, and a clean save has none', async () => {
     const { service, fake } = await makeService(tabs());

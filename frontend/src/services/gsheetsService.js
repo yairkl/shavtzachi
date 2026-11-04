@@ -2,13 +2,14 @@ import axios from 'axios';
 import { requestToken, notifyExpired } from './auth';
 import { notify } from '../lib/notify';
 import { buildFormattingRequests, isOurRule } from './sheetFormatting';
-import { parseGrid, buildScheduleRequests, buildDivisionColoringRules, buildViolationMarkRequests } from './gsheetsUtils';
+import { parseGrid, buildScheduleRequests, buildDivisionColoringRules, buildViolationMarkRequests, mapScheduleColumns, scheduleRowTimes } from './gsheetsUtils';
+import { isOurDropdown, rankForSlot, suggestionNote, listRule, workload, MAX_LIST_BLOCKS } from './assignmentLists';
 import { validateAssignments } from '../lib/scheduleValidation';
 import { generateShifts } from '../lib/schedulerCore';
 import { DAY_TAB, OUT_FIRST_ROW, planDayView, buildDayViewCells, dayViewSize, daysColumn, layerRows, dayKey, dayRanges, dayName, MAX_JUMP_DAYS } from './dayView';
 import { CHECK_TAB, planLiveChecks, buildLiveCheckCells, buildLiveCheckRules, isLiveCheckRule, estimateSize, MAX_FORMULA_CHARS } from './liveChecks';
 import { TABS, COLUMN_SPECS, buildModel, mapColumns, composeRow, colLetter, normalizeKey, toSheetDateTime } from '../lib/sheetModel';
-import { parseISO, differenceInSeconds, isBefore, isAfter } from 'date-fns';
+import { parseISO, differenceInSeconds, isBefore, isAfter, addMinutes } from 'date-fns';
 
 const quoteTab = (title) => `'${String(title).replace(/'/g, "''")}'`;
 
@@ -605,7 +606,12 @@ export class GSheetsService {
     return assignments.filter((a) => a.start.getTime() < end.getTime() && a.end.getTime() > start.getTime());
   }
 
-  async saveAssignments(startDate, endDate, assignments) {
+  /**
+   * Write the schedule for the window [startDate, endDate): the other days are kept, the window's days are replaced.
+   * The grid always covers the whole window with every shift slot, filled or empty. options.rewriteOnly = true only
+   * rewrites what is already saved (the window then must not stretch the grid).
+   */
+  async saveAssignments(startDate, endDate, assignments, options = {}) {
     await this.ensureSchema();
     // Always work from fresh data: this function rewrites the whole Schedule tab.
     this.clearCache();
@@ -687,15 +693,17 @@ export class GSheetsService {
       });
     }
 
-    if (combined.length === 0) {
+    const activePosts = (await this.fetchAllData()).model.posts.filter((p) => p.is_active);
+    if (combined.length === 0 && (options.rewriteOnly || activePosts.length === 0)) {
       if (sheet) await this.batchUpdate(clearAll);
       this.clearCache();
       return;
     }
 
     combined.sort((a, b) => toDate(a.start).getTime() - toDate(b.start).getTime());
-    let fullStart = toDate(combined[0].start);
-    let fullEnd = toDate(combined[0].end);
+    // with nothing assigned anywhere the grid is just the saved window, full of empty slots to fill in
+    let fullStart = combined.length ? toDate(combined[0].start) : saveStart;
+    let fullEnd = combined.length ? toDate(combined[0].end) : saveEnd;
     combined.forEach((a) => {
       const aStart = toDate(a.start);
       const aEnd = toDate(a.end);
@@ -704,15 +712,13 @@ export class GSheetsService {
     });
     // The grid also covers the whole day being saved, so its empty slots are part of it. (A save that only rewrites
     // the existing schedule, with a window that touches nothing, must not stretch the grid.)
-    const windowMatters = prepared.length > 0 || (saveStart.getTime() < fullEnd.getTime() && saveEnd.getTime() > fullStart.getTime());
-    if (windowMatters) {
+    if (!options.rewriteOnly) {
       if (isBefore(saveStart, fullStart)) fullStart = saveStart;
       if (isAfter(saveEnd, fullEnd)) fullEnd = saveEnd;
     }
 
     // Every shift slot of the period, filled or not: empty slots are merged to the shift length too, so picking a
     // name in an empty slot fills the whole shift. (Too irregular a timetable falls back to assignments only.)
-    const activePosts = (await this.fetchAllData()).model.posts.filter((p) => p.is_active);
     const tooLong = fullEnd.getTime() - fullStart.getTime() > 400 * 24 * 3600 * 1000; // keep generating slots bounded
     const slots = tooLong ? [] : generateShifts(activePosts, fullStart, fullEnd, true)
       .flatMap((sh) => sh.post.slots.map((sl) => ({ post_name: sh.post_name, role_id: sl.role_index, start: sh.start, end: sh.end })));
@@ -770,6 +776,7 @@ export class GSheetsService {
       return { ok: false, reason: 'error' };
     });
     await this.refreshDayView().catch((e) => console.warn('Could not update the Day View', e));
+    await this.refreshAssignmentLists().catch((e) => console.warn('Could not update the assignment dropdowns', e));
     return { violations, liveChecks: live };
   }
 
@@ -899,6 +906,91 @@ export class GSheetsService {
   }
 
   /**
+   * Give every shift slot of the Schedule tab its own dropdown listing everyone, best fit first (the app's candidate
+   * ranking: skill, exclusion, busy, unavailable, rest, fewest hours), and put a hover note on each slot saying who fits
+   * and why the others do not. Assigned slots get their rule-problem note (or none). A dropdown that was set up by hand
+   * is left alone. Covers the most recent slots; older ones keep the plain soldier list.
+   * Returns { ok, blocks?, empty?, reason? }.
+   */
+  async refreshAssignmentLists() {
+    this.clearCache();
+    const cache = await this.fetchAllData();
+    const title = cache.tabs.Schedule;
+    const sheet = title ? cache.metadata.find((m) => m.properties.title === title) : null;
+    const grid = cache.raw.Schedule;
+    if (!sheet || !grid) return { ok: false, reason: 'no-schedule' };
+
+    const current = await this._scheduleValidation(title);
+    if (current && !isOurDropdown(current)) return { ok: false, reason: 'custom-dropdown' };
+
+    const { rowToDt, stepOf } = scheduleRowTimes(grid);
+    const rowIdx = Object.keys(rowToDt).map(Number).sort((a, b) => a - b);
+    if (!rowIdx.length) return { ok: false, reason: 'empty-schedule' };
+
+    const model = cache.model;
+    const colToPost = mapScheduleColumns(grid);
+    const colFor = (post, role) => {
+      const c = Object.keys(colToPost).find((k) => normalizeKey(colToPost[k].name) === normalizeKey(post) && colToPost[k].role_id === role);
+      return c === undefined ? undefined : Number(c);
+    };
+    const timeToRow = new Map(rowIdx.map((r) => [rowToDt[r].getTime(), r]));
+    const lastRow = rowIdx[rowIdx.length - 1];
+    const rangeStart = rowToDt[rowIdx[0]];
+    const rangeEnd = addMinutes(rowToDt[lastRow], stepOf(lastRow));
+    const postByName = new Map(model.posts.map((p) => [normalizeKey(p.name), p]));
+
+    // who is on what, now
+    const assignments = this._scheduleAssignments(cache).filter((a) => a.row !== undefined);
+    const assignedAt = new Map(assignments.map((a) => [`${a.row},${a.col}`, a]));
+    const forFitness = assignments.filter((a) => a.soldier_id != null).map((a) => ({
+      soldier_id: a.soldier_id, start: a.start, end: a.end, post_name: a.post_name, role_id: a.role_id,
+      intensity_weight: postByName.get(normalizeKey(a.post_name))?.intensity_weight || 1,
+    }));
+    const assignmentsBySoldier = new Map();
+    forFitness.forEach((a) => { if (!assignmentsBySoldier.has(a.soldier_id)) assignmentsBySoldier.set(a.soldier_id, []); assignmentsBySoldier.get(a.soldier_id).push(a); });
+    const soldiers = model.soldiers.map((s) => ({ ...s, unavailabilities: model.unavailabilities.filter((u) => u.soldier_name === s.name) }));
+    const ctx = { soldiers, assignmentsBySoldier, history: workload(forFitness, model.posts) };
+
+    // the slots of the schedule, mapped to their cells
+    const blocks = [];
+    for (const shift of generateShifts(model.posts.filter((p) => p.is_active), rangeStart, rangeEnd, true)) {
+      const row = timeToRow.get(shift.start.getTime());
+      if (row === undefined) continue;
+      for (const sl of shift.post.slots) {
+        const col = colFor(shift.post_name, sl.role_index);
+        if (col === undefined) continue;
+        const rows = Math.max(1, Math.round((shift.end - shift.start) / 60000 / stepOf(row)));
+        blocks.push({ row, col, rows, post: shift.post, slot: { post_name: shift.post_name, role_id: sl.role_index, start: shift.start, end: shift.end } });
+      }
+    }
+    blocks.sort((a, b) => a.row - b.row || a.col - b.col);
+    const recent = blocks.slice(-MAX_LIST_BLOCKS);
+
+    // rule problems of assigned slots, shown in their note
+    const placements = assignments.map((a) => ({ assignment: a, row: a.row, col: a.col }));
+    const problemNote = new Map(this._checkPlacements(placements, model).marks.map((m) => [`${m.row},${m.col}`, `Problem${m.notes.length > 1 ? 's' : ''}:\n- ${m.notes.join('\n- ')}`]));
+
+    const sheetId = sheet.properties.sheetId;
+    const width = Math.max(...grid.map((r) => (r ? r.length : 0)), 3);
+    const requests = [];
+    const base = this._assignmentDropdown(model, cache.tabs);
+    if (base) requests.push({ setDataValidation: { range: { sheetId, startRowIndex: 2, endRowIndex: Math.max(grid.length, 3), startColumnIndex: 2, endColumnIndex: width }, rule: base } });
+
+    let empty = 0;
+    for (const b of recent) {
+      const cell = (extra) => ({ range: { sheetId, startRowIndex: b.row, endRowIndex: b.row + 1, startColumnIndex: b.col, endColumnIndex: b.col + 1 }, ...extra });
+      const ranked = rankForSlot(b.slot, b.post, ctx);
+      requests.push({ setDataValidation: { range: { sheetId, startRowIndex: b.row, endRowIndex: b.row + b.rows, startColumnIndex: b.col, endColumnIndex: b.col + 1 }, rule: listRule(ranked) } });
+      const taken = assignedAt.get(`${b.row},${b.col}`);
+      if (!taken) empty += 1;
+      requests.push({ updateCells: cell({ rows: [{ values: [{ note: taken ? (problemNote.get(`${b.row},${b.col}`) || '') : suggestionNote(ranked) }] }], fields: 'note' }) });
+    }
+    if (requests.length) await this.batchUpdate(requests);
+    this.clearCache();
+    return { ok: true, blocks: recent.length, empty };
+  }
+
+  /**
    * Bring an existing spreadsheet fully up to date in one go: missing tabs/columns, formatting and validation of the data
    * tabs, and the Schedule tab's colours, soldier dropdown, live checks, Day View, jump links and problem marks.
    * No cell content is changed: the saved assignments are read and written back exactly as they are.
@@ -918,7 +1010,7 @@ export class GSheetsService {
       return { steps, assignments: 0, violations: 0 };
     }
     // A save whose window touches nothing keeps every assignment and rewrites the tab with all the current features.
-    await this.saveAssignments('1970-01-01T00:00:00', '1970-01-02T00:00:00', []);
+    await this.saveAssignments('1970-01-01T00:00:00', '1970-01-02T00:00:00', [], { rewriteOnly: true });
     steps.push(`Rebuilt the Schedule tab with colours and the soldier dropdown (${existing.length} assignments kept)`);
     const check = await this.checkSchedule({ mark: true });
     steps.push('Updated the live checks, the Day View and the jump links');
@@ -1069,6 +1161,7 @@ export class GSheetsService {
         console.warn('Could not update the live schedule checks', e);
         return { ok: false, reason: 'error' };
       });      await this.refreshDayView().catch((e) => console.warn('Could not update the Day View', e));
+      await this.refreshAssignmentLists().catch((e) => console.warn('Could not update the assignment dropdowns', e));
     }
     return { total: assignments.length, violations, marked: marks.length, liveChecks: live };
   }

@@ -114,8 +114,10 @@ describe('live checks written by the app', () => {
     const { service, fake } = await makeService(tabs([FORT, GATE]));
     expect(await service.refreshLiveChecks()).toEqual({ ok: false, reason: 'no-schedule' });
     await service.saveAssignments(at(6), at(30), [asg('Dan', 'Fort', 6, 30)]);
-    await service.saveAssignments(at(6), at(30), []); // clear everything
-    expect(fake.tab('Schedule').conditionalFormats.filter(isLiveCheckRule)).toHaveLength(0);
+    await service.saveAssignments(at(6), at(30), []); // nobody assigned any more
+    // the day keeps its empty slots to fill in, and the live checks stay ready for the next entry
+    expect(await service.getAssignmentsInRange(at(6), at(30))).toEqual([]);
+    expect(fake.tab('Schedule').conditionalFormats.filter(isLiveCheckRule)).toHaveLength(2);
   });
 
   it('check schedule also refreshes the live checks for hand-made structure changes', async () => {

@@ -53,7 +53,9 @@ describe('applyAllFormatting', () => {
     // schedule: colours, soldier dropdown, live-check rules
     const schedule = fake.tab('Schedule');
     expect(schedule.conditionalFormats.length).toBe(10 + 2);
-    expect(schedule.validations[schedule.validations.length - 1].rule.condition.type).toBe('ONE_OF_RANGE');
+    const kinds = new Set(schedule.validations.map((v) => v.rule.condition.type));
+    expect(kinds.has('ONE_OF_RANGE')).toBe(true); // the plain soldier list over the whole schedule
+    expect(kinds.has('ONE_OF_LIST')).toBe(true);  // and each slot's own list, best fit first
     // helper tabs, Day View, jump links and shortcuts
     expect(fake.tab(CHECK_TAB)).toBeTruthy();
     expect(fake.tab(DAY_TAB)).toBeTruthy();

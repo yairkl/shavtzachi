@@ -47,7 +47,9 @@ After a schedule is saved the spreadsheet gets a **Day View** tab: pick a day in
 
 ### Assigning by hand
 
-Every save puts a **soldier dropdown** (the names of the Soldiers tab) on all cells of the Schedule tab, empty slots included: click a cell, pick a name. It never blocks typing, and a dropdown you set up yourself is kept instead. A name picked into a single cell lasts for the shift length of its post (it stops before the next filled cell), so you do not need to merge cells by hand.
+Every save builds the whole saved day as a grid of **merged shift blocks, filled or empty**: each post role has its own column and every shift slot is merged to the post's shift length, so picking a name in an empty slot fills the whole shift with no manual merging. Empty slots are lightly shaded so unfilled ones stand out.
+
+Each slot has its **own dropdown listing everyone, best fit first**, ordered by the same engine as the app's candidate list: people with the right skill who are free and rested come first (fewest hours first), people who are unsuitable come last but can still be picked when there is no choice. Hover an empty slot to see a note with who fits best and why the others do not (lacks the skill, excluded from the post, already on another shift, unavailable, not enough rest). The dropdown can only insert the chosen name, so the fit information lives in the order and in the note rather than in the list items. The lists and notes are refreshed on every save and by *Check schedule* / *Update whole spreadsheet*; after hand edits press one of those to re-rank. The most recent 400 slots get their own list; older ones keep a plain soldier list. A dropdown you set up yourself is kept instead, and typing another name is never blocked.
 
 ### Updating an existing spreadsheet
 
@@ -74,7 +76,7 @@ One-time setup (about 5 minutes):
 4. In the GitHub repository: Settings -> Secrets and variables -> Actions -> **New repository secret** named `GOOGLE_SA_KEY`, value = the whole contents of that JSON file. Then delete the downloaded file.
 5. Run it: Actions -> **Live Google test** -> Run workflow. To also run it every Monday, add a repository *variable* `GOOGLE_LIVE_TESTS` = `true`.
 
-Notes: the workflow does not run on pull requests (forks cannot read secrets, and it writes to a real Google account). Prefer no stored key at all? Replace `credentials_json` in `.github/workflows/live.yml` with `workload_identity_provider` and `service_account` ([keyless Workload Identity Federation](https://github.com/google-github-actions/auth#workload-identity-federation-through-a-service-account)). To run it from your own machine, use the one-hour token from the browser as described above.
+Notes: the workflow does not run on pull requests (forks cannot read secrets, and it writes to a real Google account). The workflow signs its own token request with the key (`frontend/scripts/service-account-token.mjs`), so only the Sheets and Drive APIs need to be enabled: no IAM Credentials API and no extra permission on the service account. To run it from your own machine, use the one-hour token from the browser as described above.
 
 Pull requests run lint, the unit and contract tests, and the browser tests (`.github/workflows/ci.yml`).
 

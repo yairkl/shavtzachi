@@ -14,7 +14,8 @@ const tabs = (extra = {}) => ({
 });
 const at = (h, day = 10) => new Date(2025, 2, day, h, 0, 0).toISOString();
 const asg = (who, h1, h2, day = 10) => ({ soldier_name: who, post_name: 'Gate', role_id: 0, start: at(h1, day), end: at(h2, day) });
-const lastRule = (fake) => { const v = fake.tab('Schedule').validations; return v[v.length - 1]; };
+// the plain soldier list over the whole schedule (each slot also has its own ordered list: see assignmentLists.test.js)
+const lastRule = (fake) => { const v = fake.tab('Schedule').validations.filter((x) => x.rule.condition.type === 'ONE_OF_RANGE'); return v[v.length - 1]; };
 
 describe('assignment dropdown in the Schedule cells', () => {
   it('every save puts a soldier dropdown over the whole schedule', async () => {

@@ -180,14 +180,15 @@ test('Check schedule finds double booking and cooldown problems typed straight i
   await s.page.getByRole('button', { name: /Check schedule/ }).click();
   await s.page.getByText(/Dan is double-booked/).first().waitFor();
   await s.page.getByText(/rest (before|after)/).first().waitFor();
-  const marked = Object.keys(s.fake.tab('Schedule').notes || {}).sort();
+  const problemNotes = () => Object.entries(s.fake.tab('Schedule').notes || {}).filter(([, t]) => /^Problem/.test(t)).map(([k]) => k).sort();
+  const marked = problemNotes();
   assert.deepEqual(marked, ['2,2', '2,3', '3,2', '4,3']);
   // fix the sheet by hand, re-check: everything is clean and the marks are gone
   s.fake.tab('Schedule').values[2][3] = '';
   s.fake.tab('Schedule').values[3][2] = '';
   await s.page.getByRole('button', { name: /Check schedule/ }).click();
   await s.page.getByText(/no problems/i).first().waitFor();
-  assert.deepEqual(Object.keys(s.fake.tab('Schedule').notes || {}), []);
+  assert.deepEqual(problemNotes(), []);
   assert.deepEqual(s.problems, []);
   await s.context.close();
 });
@@ -281,10 +282,15 @@ test('saving from the app gives the Schedule tab a soldier dropdown over the who
   await s.page.getByRole('button', { name: /Save/ }).first().click();
   await s.toast(/Saved \d+ assignment/);
   const rules = s.fake.tab('Schedule').validations || [];
-  assert.equal(rules.length, 1);
-  assert.equal(rules[0].rule.condition.type, 'ONE_OF_RANGE');
-  assert.match(rules[0].rule.condition.values[0].userEnteredValue, /^='Soldiers'!\$A\$2:\$A$/);
-  assert.ok(rules[0].range.endRowIndex >= s.fake.rows('Schedule').length, 'covers every row of the schedule');
+  const plain = rules.filter((r) => r.rule.condition.type === 'ONE_OF_RANGE');
+  assert.ok(plain.length >= 1, 'a plain soldier list over the whole schedule');
+  assert.match(plain[0].rule.condition.values[0].userEnteredValue, /^='Soldiers'!\$A\$2:\$A$/);
+  assert.ok(plain[0].range.endRowIndex >= s.fake.rows('Schedule').length, 'covers every row of the schedule');
+  // and each slot has its own list of everyone, best fit first, plus a note on the empty ones
+  const lists = rules.filter((r) => r.rule.condition.type === 'ONE_OF_LIST');
+  assert.ok(lists.length >= 5, `expected a list per slot, got ${lists.length}`);
+  assert.equal(lists[0].rule.condition.values.length, 4, 'everyone is offered');
+  assert.ok(Object.values(s.fake.tab('Schedule').notes || {}).some((n) => /Best fits|Nobody fits/.test(n)), 'empty slots explain who fits');
   assert.deepEqual(s.problems, []);
   await s.context.close();
 });

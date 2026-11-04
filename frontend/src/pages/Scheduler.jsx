@@ -588,7 +588,7 @@ export default function Scheduler() {
              </Button>
           </div>
           
-          {(isDraft || filledSlots > 0) && (
+          {(isDraft || filledSlots > 0 || shifts.length > 0) && (
             <div className="flex items-center gap-2">
               <Button onClick={handleExport} variant="outline" className="h-8 px-3 sm:px-4 text-[11px] gap-1.5 border-white/10 hover:bg-white/5 rounded-full text-slate-300">
                 <FileSpreadsheet className="w-3.5 h-3.5" /> <span className="font-bold hidden sm:inline">Excel</span>

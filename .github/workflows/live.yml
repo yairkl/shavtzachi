@@ -18,7 +18,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write # only used if you switch to keyless Workload Identity Federation (see the readme)
 
 concurrency: live-google-test
 
@@ -40,18 +39,20 @@ jobs:
         working-directory: frontend
         run: npm install
 
+      # Signs a token request with the service-account key (scripts/service-account-token.mjs): no extra Google APIs or
+      # IAM permissions are needed beyond the Sheets and Drive APIs.
       - name: Get a short-lived Google access token
         id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GOOGLE_SA_KEY }}
-          token_format: access_token
-          access_token_scopes: >-
-            https://www.googleapis.com/auth/spreadsheets,
-            https://www.googleapis.com/auth/drive
+        working-directory: frontend
+        env:
+          GOOGLE_SA_KEY: ${{ secrets.GOOGLE_SA_KEY }}
+        run: |
+          TOKEN="$(node scripts/service-account-token.mjs)"
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
 
       - name: Live test against Google Sheets
         working-directory: frontend
         env:
-          GOOGLE_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          GOOGLE_ACCESS_TOKEN: ${{ steps.auth.outputs.token }}
         run: npm run test:live

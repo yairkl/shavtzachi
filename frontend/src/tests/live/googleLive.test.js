@@ -274,6 +274,37 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
     await service.saveAssignments(day[0], day[1], []);
   }, 240000);
 
+  it('every slot is a merged block with its own dropdown (everyone, best fit first) and a note, as Google stores them', async () => {
+    const day = ['2025-04-07T06:00:00', '2025-04-08T06:00:00'];
+    await service.saveAssignments(day[0], day[1], [{ soldier_name: 'Dan', post_name: 'Gate', role_id: 0, start: '2025-04-07T06:00:00', end: '2025-04-07T14:00:00' }]);
+    const res = await service.refreshAssignmentLists();
+    expect(res.ok).toBe(true);
+    expect(res.blocks).toBeGreaterThan(1);
+    expect(res.empty).toBeGreaterThan(0);
+    if (MODE === 'live') {
+      service.clearCache();
+      const { metadata, raw } = await service.fetchAllData();
+      const schedule = metadata.find((m) => m.properties.title === 'Schedule');
+      const header = raw.Schedule[0];
+      // an empty slot: take the second column's first merged block that has no name
+      const merges = (schedule.merges || []).filter((m) => m.startColumnIndex >= 2 && m.endRowIndex - m.startRowIndex > 1);
+      expect(merges.length).toBeGreaterThan(1); // empty slots are merged to their shift length too
+      const empty = merges.find((m) => !String(raw.Schedule[m.startRowIndex]?.[m.startColumnIndex] ?? '').trim());
+      expect(empty, `a merged empty slot in ${JSON.stringify(header)}`).toBeTruthy();
+      const params = new URLSearchParams({
+        ranges: `'Schedule'!${String.fromCharCode(65 + empty.startColumnIndex)}${empty.startRowIndex + 1}`,
+        fields: 'sheets(data(rowData(values(dataValidation,note))))',
+      });
+      const cell = (await service.client.get(`/${service.spreadsheetId}?${params.toString()}`)).data.sheets[0].data[0].rowData[0].values[0];
+      expect(cell.dataValidation.condition.type).toBe('ONE_OF_LIST');
+      const names = cell.dataValidation.condition.values.map((v) => v.userEnteredValue);
+      const everyone = (await service.getSoldiers()).map((x) => x.name);
+      expect(new Set(names)).toEqual(new Set(everyone)); // everyone is offered
+      expect(cell.note).toMatch(/Best fits|Nobody fits/);
+    }
+    await service.saveAssignments(day[0], day[1], []);
+  }, 180000);
+
   it('grows the grid for a schedule wider than the default 26 columns', async () => {
     const wide = Array.from({ length: 30 }, (_, i) => [`W${i + 1}`, '12', '0:00', '0:00', '0', '1', 'guard', 'TRUE', '', '']);
     await service.appendRows("'Posts'!A:J", wide);

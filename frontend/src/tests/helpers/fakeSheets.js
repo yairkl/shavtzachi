@@ -190,7 +190,10 @@ export class FakeSheets {
             arg.rows.forEach((row, ri) => row.values.forEach((cell, ci) => {
               const v = cell?.userEnteredValue?.stringValue ?? cell?.userEnteredValue?.formulaValue;
               if (v !== undefined) this._write(sheet, startRowIndex + ri, startColumnIndex + ci, v);
-              if (cell?.note !== undefined) (sheet.notes ||= {})[`${startRowIndex + ri},${startColumnIndex + ci}`] = cell.note;
+              if (cell?.note !== undefined) {
+                const key = `${startRowIndex + ri},${startColumnIndex + ci}`;
+                if (cell.note === '') delete (sheet.notes ||= {})[key]; else (sheet.notes ||= {})[key] = cell.note;
+              }
             }));
             break;
           }
