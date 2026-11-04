@@ -275,3 +275,6 @@ export const getAuthStatus = async () => {
   }
   return { data: { authenticated: false, backend: 'gsheets', reason: 'no_token' } };
 };
+
+/** Build the Day View tab (a day picker inside the spreadsheet) and return its address, set to `day` ("yyyy-MM-dd"). */
+export const openDayView = (day) => gsheetsService.openDayView(day);

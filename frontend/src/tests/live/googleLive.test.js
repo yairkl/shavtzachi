@@ -17,6 +17,7 @@ import { GSheetsService } from '../../services/gsheetsService';
 import { HyperFormula } from 'hyperformula';
 import { makeService } from '../helpers/fakeSheets';
 import { CHECK_TAB } from '../../services/liveChecks';
+import { DAY_TAB } from '../../services/dayView';
 import { generateShifts, solveShiftAssignmentGreedy } from '../../lib/schedulerCore';
 
 const TOKEN = process.env.GOOGLE_ACCESS_TOKEN;
@@ -207,6 +208,29 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
     const flags = await computedFlags();
     expect(flags.filter((f) => f === 'D')).toHaveLength(2); // Gil on both, Dan fine
     await service.saveAssignments(day[0], day[1], []);
+  }, 120000);
+
+  it('Day View: the spreadsheet computes the chosen day, with a night shift carried over midnight', async () => {
+    await service.saveAssignments('2025-03-29T00:00:00', '2025-03-31T00:00:00', [
+      { soldier_name: 'Gil', post_name: 'Clinic', role_id: 0, start: '2025-03-29T22:00:00', end: '2025-03-30T10:00:00' },
+      { soldier_name: 'Dan', post_name: 'Gate', role_id: 0, start: '2025-03-30T06:00:00', end: '2025-03-30T14:00:00' },
+    ]);
+    const res = await service.openDayView('2025-03-30');
+    expect(res.selected).toBe('2025-03-30');
+    service.clearCache();
+    let rows;
+    if (MODE === 'live') {
+      rows = await service.fetchSheetValues(`'${DAY_TAB}'!A1:H40`);
+    } else {
+      const hf = HyperFormula.buildFromSheets({ Schedule: fake.rows('Schedule'), [DAY_TAB]: fake.rows(DAY_TAB) }, { licenseKey: 'gpl-v3' });
+      rows = hf.getSheetValues(hf.getSheetId(DAY_TAB)).map((r) => r.map((v) => (v === null || v === undefined ? '' : String(v))));
+    }
+    const shown = rows.slice(4).filter((r) => r[1]);
+    const text = JSON.stringify(shown);
+    expect(text).toContain('Gil'); // the Clinic night shift started the evening before and is still on duty after midnight
+    expect(text).toContain('Dan');
+    expect(shown.every((r) => !r[0] || r[0].includes('2025-03-30'))).toBe(true);
+    await service.saveAssignments('2025-03-29T00:00:00', '2025-03-31T00:00:00', []);
   }, 120000);
 
   it('grows the grid for a schedule wider than the default 26 columns', async () => {

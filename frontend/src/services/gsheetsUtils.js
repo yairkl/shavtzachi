@@ -271,21 +271,22 @@ const a1col = (i) => { let n = i + 1; let s = ''; while (n > 0) { const r = (n -
  * rule) made Google Sheets take a long time to paint the colours.
  * `soldiers` = { title, nameCol, divisionCol } (0-based column indexes); without both columns no rules are added.
  */
-export function buildDivisionColoringRules(sheetId, soldiers = { title: 'Soldiers', nameCol: 0, divisionCol: 1 }, grid = { rowCount: 1000, columnCount: 100 }) {
+export function buildDivisionColoringRules(sheetId, soldiers = { title: 'Soldiers', nameCol: 0, divisionCol: 1 }, grid = { rowCount: 1000, columnCount: 100 }, origin = { row: 2, col: 2 }) {
   const requests = [];
-  const range = { sheetId, startRowIndex: 2, endRowIndex: Math.max(grid.rowCount || 1000, 3), startColumnIndex: 2, endColumnIndex: Math.max(grid.columnCount || 100, 3) };
+  const range = { sheetId, startRowIndex: origin.row, endRowIndex: Math.max(grid.rowCount || 1000, origin.row + 1), startColumnIndex: origin.col, endColumnIndex: Math.max(grid.columnCount || 100, origin.col + 1) };
+  const anchor = `${a1col(origin.col)}${origin.row + 1}`; // the range's top-left cell: the formulas are relative to it
 
   if (soldiers && soldiers.nameCol !== undefined && soldiers.divisionCol !== undefined) {
     const q = String(soldiers.title).replace(/'/g, "''");
     const rng = (c) => `INDIRECT("'${q}'!$${a1col(c)}$2:$${a1col(c)}")`;
-    const division = `IFERROR(VALUE(INDEX(${rng(soldiers.divisionCol)},MATCH(C3,${rng(soldiers.nameCol)},0))),0)`;
+    const division = `IFERROR(VALUE(INDEX(${rng(soldiers.divisionCol)},MATCH(${anchor},${rng(soldiers.nameCol)},0))),0)`;
     DIVISION_COLORS.forEach((color, i) => {
       requests.push({
         addConditionalFormatRule: {
           rule: {
             ranges: [range],
             booleanRule: {
-              condition: { type: 'CUSTOM_FORMULA', values: [{ userEnteredValue: `=AND(LEN(C3)>0,${division}>0,MOD(${division}-1,${DIVISION_COLORS.length})+1=${i + 1})` }] },
+              condition: { type: 'CUSTOM_FORMULA', values: [{ userEnteredValue: `=AND(LEN(${anchor})>0,${division}>0,MOD(${division}-1,${DIVISION_COLORS.length})+1=${i + 1})` }] },
               format: { backgroundColor: color },
             },
           },

@@ -225,3 +225,28 @@ test('Check schedule sets up live checks that flag a 24h shift vs a 4h shift of 
   assert.deepEqual(s.problems, []);
   await s.context.close();
 });
+
+test('"Day in Sheets" builds the Day View for the day on screen and opens it', async () => {
+  const { HyperFormula } = await import('hyperformula');
+  const s = await app.open(messySheet());
+  await s.context.route('https://docs.google.com/**', (r) => r.fulfill({ status: 200, contentType: 'text/html', body: '<title>sheet</title>' }));
+  await s.go('/scheduler');
+  await s.page.getByRole('button', { name: /Auto Assign/ }).click();
+  await s.toast(/Assigned all/);
+  await s.page.getByRole('button', { name: /Save/ }).first().click();
+  await s.toast(/Saved \d+ assignment/);
+
+  const [popup] = await Promise.all([s.context.waitForEvent('page'), s.page.getByRole('button', { name: /Day in Sheets/ }).click()]);
+  await popup.waitForURL(/docs\.google\.com\/spreadsheets\/d\/test-sheet\/edit#gid=\d+/);
+  const day = s.fake.rows('Day View')[0][1];
+  assert.match(day, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(day, new Date().toISOString().slice(0, 10), 'opened on the day shown in the app');
+
+  // the table the spreadsheet would show for that day has real names in it
+  const hf = HyperFormula.buildFromSheets({ Schedule: s.fake.rows('Schedule'), 'Day View': s.fake.rows('Day View') }, { licenseKey: 'gpl-v3' });
+  const id = hf.getSheetId('Day View');
+  const shown = hf.getSheetValues(id).slice(4, 40).flat().filter((v) => typeof v === 'string' && /^(Dan|Eli|Avi|Ben)$/.test(v));
+  assert.ok(shown.length >= 4, `expected assigned names in the Day View, got ${shown.length}`);
+  assert.deepEqual(s.problems, []);
+  await s.context.close();
+});

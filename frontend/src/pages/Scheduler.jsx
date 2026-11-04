@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { getSoldiers, getPosts, getShiftsWithAssignments, draftSchedule, saveSchedule, getCandidates, getUnavailabilities, exportSchedule } from '@/services/api';
+import { getSoldiers, getPosts, getShiftsWithAssignments, draftSchedule, saveSchedule, getCandidates, getUnavailabilities, exportSchedule, openDayView } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import { notify } from '@/lib/notify';
 import { describeError } from '@/lib/errors';
 import { DiagnosticsBanner } from '@/components/SheetHealth';
 import { diagnoseInputs, summarizeUnfilled } from '@/lib/schedulerCore';
 import { validateAssignments, buildWarningMap } from '@/lib/scheduleValidation';
-import { Save, RefreshCw, ChevronLeft, ChevronRight, User, Users, LayoutGrid, CheckCircle2, GripVertical, Wand2, X, PanelRightClose, PanelRight, AlertTriangle, ShieldAlert, Filter, Ban, CalendarX, Clock4, ShieldCheck, FileSpreadsheet } from 'lucide-react';
+import { Save, RefreshCw, ChevronLeft, ChevronRight, User, Users, LayoutGrid, CheckCircle2, GripVertical, Wand2, X, PanelRightClose, PanelRight, AlertTriangle, ShieldAlert, Filter, Ban, CalendarX, Clock4, ShieldCheck, FileSpreadsheet, Table2 } from 'lucide-react';
 import { addDays, addHours, format, startOfToday, startOfDay, parseISO, isBefore, differenceInMinutes } from 'date-fns';
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -318,6 +318,24 @@ export default function Scheduler() {
     }
   };
 
+  // Open the spreadsheet's "Day View" tab on the day shown here. The window is opened first so a pop-up blocker
+  // sees it as the direct result of the click.
+  const handleDayView = async () => {
+    const tab = window.open('', '_blank');
+    setLoading(true);
+    try {
+      const { dayStart } = getDayBounds();
+      const res = await openDayView(format(dayStart, 'yyyy-MM-dd'));
+      if (tab) tab.location.href = res.url; else window.open(res.url, '_blank');
+      if (res.missing) notify.info(`${format(dayStart, 'MMM dd')} has no saved schedule yet, so the Day View shows ${res.selected}. Save this day first.`);
+    } catch (e) {
+      if (tab) tab.close();
+      notify.error(describeError(e, 'Could not open the Day View.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // --- Drag and Drop ---
   const handleDragStart = (e, soldier) => {
     e.dataTransfer.setData('application/json', JSON.stringify({ soldier_id: soldier.id, soldier_name: soldier.name }));
@@ -558,6 +576,9 @@ export default function Scheduler() {
             <div className="flex items-center gap-2">
               <Button onClick={handleExport} variant="outline" className="h-8 px-3 sm:px-4 text-[11px] gap-1.5 border-white/10 hover:bg-white/5 rounded-full text-slate-300">
                 <FileSpreadsheet className="w-3.5 h-3.5" /> <span className="font-bold hidden sm:inline">Excel</span>
+              </Button>
+              <Button onClick={handleDayView} disabled={loading} variant="outline" title="Open this day in the spreadsheet's Day View tab" className="h-8 px-3 sm:px-4 text-[11px] gap-1.5 border-white/10 hover:bg-white/5 rounded-full text-slate-300">
+                <Table2 className="w-3.5 h-3.5" /> <span className="font-bold hidden sm:inline">Day in Sheets</span>
               </Button>
               <Button onClick={handleSave} disabled={loading} className="h-8 px-3 sm:px-4 text-[11px] gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-lg shadow-emerald-900/50 rounded-full">
                 <Save className="w-3.5 h-3.5" /> <span className="font-bold">Save</span>

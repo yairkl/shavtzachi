@@ -4,6 +4,7 @@ import { notify } from '../lib/notify';
 import { buildFormattingRequests, isOurRule } from './sheetFormatting';
 import { parseGrid, buildScheduleRequests, buildDivisionColoringRules, buildViolationMarkRequests } from './gsheetsUtils';
 import { validateAssignments } from '../lib/scheduleValidation';
+import { DAY_TAB, OUT_FIRST_ROW, planDayView, buildDayViewCells, dayViewSize, daysColumn, layerRows, dayKey } from './dayView';
 import { CHECK_TAB, planLiveChecks, buildLiveCheckCells, buildLiveCheckRules, isLiveCheckRule, estimateSize, MAX_FORMULA_CHARS } from './liveChecks';
 import { TABS, COLUMN_SPECS, buildModel, mapColumns, composeRow, colLetter, normalizeKey, toSheetDateTime } from '../lib/sheetModel';
 import { parseISO, differenceInSeconds, isBefore, isAfter } from 'date-fns';
@@ -744,7 +745,115 @@ export class GSheetsService {
       console.warn('Could not update the live schedule checks', e);
       return { ok: false, reason: 'error' };
     });
+    await this.refreshDayView().catch((e) => console.warn('Could not update the Day View', e));
     return { violations, liveChecks: live };
+  }
+
+  /**
+   * (Re)build the "Day View" tab: a day dropdown (B1) and a table of that day of the Schedule tab, all formulas,
+   * so picking another day in the sheet updates it instantly. Keeps the day currently selected when it still exists.
+   * Pass `day` ("yyyy-mm-dd") to select a day. Returns { ok, sheetId?, selected?, reason? }.
+   */
+  async refreshDayView({ day } = {}) {
+    this.clearCache();
+    const cache = await this.fetchAllData();
+    const scheduleTitle = cache.tabs.Schedule;
+    if (!scheduleTitle) return { ok: false, reason: 'no-schedule' };
+    const plan = planDayView(cache.raw.Schedule, cache.model.posts);
+    const existing = cache.metadata.find((m) => m.properties.title === DAY_TAB);
+    if (!plan) return { ok: false, reason: 'empty-schedule', sheetId: existing?.properties.sheetId };
+
+    // which day is selected?
+    let selected = day && plan.dayList.includes(day) ? day : null;
+    if (!selected && existing) {
+      const current = await this.fetchSheetValues(`${quoteTab(DAY_TAB)}!B1`).catch(() => []);
+      const value = String(current?.[0]?.[0] ?? '').trim();
+      if (plan.dayList.includes(value)) selected = value;
+    }
+    if (!selected) {
+      const today = dayKey(new Date());
+      selected = plan.dayList.includes(today) ? today : plan.dayList[plan.dayList.length - 1];
+    }
+
+    const cells = buildDayViewCells(plan, scheduleTitle, selected);
+    if (dayViewSize(cells) > 5_000_000) return { ok: false, reason: 'too-large' };
+
+    const soldiers = this._soldiersRef(cache.model, cache.tabs);
+    const width = Math.max(...plan.columns.map((c) => c.index)) + 1;
+    const dcol = daysColumn(plan);
+    const L = layerRows(plan);
+    const height = cells.length;
+    const rowCount = height + 5;
+    const columnCount = dcol + 3;
+
+    const requests = [];
+    let sheetId = existing?.properties.sheetId;
+    if (!existing) {
+      sheetId = Math.max(0, ...cache.metadata.map((m) => m.properties.sheetId)) + 2000;
+      requests.push({ addSheet: { properties: { sheetId, title: DAY_TAB, tabColorStyle: { rgbColor: { red: 0.25, green: 0.32, blue: 0.71 } }, gridProperties: { rowCount, columnCount } } } });
+    } else {
+      const gp = existing.properties.gridProperties || {};
+      (existing.conditionalFormats || []).map((_, i) => i).reverse().forEach((index) => requests.push({ deleteConditionalFormatRule: { sheetId, index } }));
+      if ((gp.rowCount || 0) < rowCount || (gp.columnCount || 0) < columnCount) {
+        requests.push({ updateSheetProperties: { properties: { sheetId, gridProperties: { rowCount: Math.max(rowCount, gp.rowCount || 0), columnCount: Math.max(columnCount, gp.columnCount || 0) } }, fields: 'gridProperties(rowCount,columnCount)' } });
+      }
+      requests.push({ repeatCell: { range: { sheetId }, cell: {}, fields: 'userEnteredValue,userEnteredFormat' } });
+      requests.push({ updateDimensionProperties: { range: { sheetId, dimension: 'ROWS', startIndex: 0, endIndex: Math.max(rowCount, gp.rowCount || 0) }, properties: { hiddenByUser: false }, fields: 'hiddenByUser' } });
+    }
+
+    const toCell = (v) => (v === '' ? {} : v.startsWith('=') ? { userEnteredValue: { formulaValue: v } } : { userEnteredValue: { stringValue: v } });
+    requests.push({
+      updateCells: {
+        range: { sheetId, startRowIndex: 0, startColumnIndex: 0 },
+        rows: cells.map((row) => {
+          let end = row.length;
+          while (end > 0 && row[end - 1] === '') end -= 1;
+          return { values: row.slice(0, end).map(toCell) };
+        }),
+        fields: 'userEnteredValue',
+      },
+    });
+
+    const white = { red: 1, green: 1, blue: 1 };
+    const indigo = { red: 63 / 255, green: 81 / 255, blue: 181 / 255 };
+    requests.push(
+      // header rows and the selector
+      { repeatCell: { range: { sheetId, startRowIndex: 2, endRowIndex: 4, startColumnIndex: 0, endColumnIndex: width }, cell: { userEnteredFormat: { backgroundColor: indigo, textFormat: { bold: true, foregroundColor: white }, horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)' } },
+      { repeatCell: { range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 1 }, cell: { userEnteredFormat: { textFormat: { bold: true, fontSize: 12 } } }, fields: 'userEnteredFormat.textFormat' } },
+      { repeatCell: { range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 1, endColumnIndex: 2 }, cell: { userEnteredFormat: { backgroundColor: { red: 1, green: 0.95, blue: 0.7 }, textFormat: { bold: true, fontSize: 12 }, horizontalAlignment: 'CENTER', numberFormat: { type: 'DATE', pattern: 'yyyy-mm-dd' } } }, fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,numberFormat)' } },
+      { repeatCell: { range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 2, endColumnIndex: 8 }, cell: { userEnteredFormat: { textFormat: { foregroundColor: { red: 0.6, green: 0.6, blue: 0.6 }, fontSize: 8 } } }, fields: 'userEnteredFormat.textFormat' } },
+      { repeatCell: { range: { sheetId, startRowIndex: OUT_FIRST_ROW - 1, endRowIndex: OUT_FIRST_ROW - 1 + plan.outRows, startColumnIndex: 0, endColumnIndex: width }, cell: { userEnteredFormat: { horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat.horizontalAlignment' } },
+      { updateSheetProperties: { properties: { sheetId, gridProperties: { frozenRowCount: 4, frozenColumnCount: 2 } }, fields: 'gridProperties(frozenRowCount,frozenColumnCount)' } },
+      { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 2 }, properties: { pixelSize: 120 }, fields: 'pixelSize' } },
+      { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: 2, endIndex: width }, properties: { pixelSize: 130 }, fields: 'pixelSize' } },
+      // the dropdown of days
+      { setDataValidation: { range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 1, endColumnIndex: 2 }, rule: { condition: { type: 'ONE_OF_RANGE', values: [{ userEnteredValue: `=$${colLetter(dcol)}$4:$${colLetter(dcol)}$400` }] }, inputMessage: 'Pick a day', strict: false, showCustomUi: true } } },
+      // the helper layers are hidden
+      { updateDimensionProperties: { range: { sheetId, dimension: 'ROWS', startIndex: L.key(plan.first) - 2, endIndex: height }, properties: { hiddenByUser: true }, fields: 'hiddenByUser' } },
+      ...buildDivisionColoringRules(sheetId, soldiers, { rowCount: OUT_FIRST_ROW - 1 + plan.outRows, columnCount: width }, { row: OUT_FIRST_ROW - 1, col: 2 }),
+    );
+
+    await this.batchUpdate(requests);
+    this.clearCache();
+    return { ok: true, sheetId, selected };
+  }
+
+  /**
+   * The address of the Day View tab, set to `day` ("yyyy-mm-dd") when given. Builds the tab first if it does not exist.
+   * Returns { url, sheetId, selected } or throws a readable error.
+   */
+  async openDayView(day) {
+    let res = await this.refreshDayView({ day });
+    if (!res.ok) {
+      if (res.reason === 'no-schedule' || res.reason === 'empty-schedule') throw new Error('There is no saved schedule yet. Save a schedule first, then open the Day View.');
+      if (res.reason === 'too-large') throw new Error('This schedule is too long for the Day View.');
+      throw new Error('Could not build the Day View.');
+    }
+    if (day && res.selected !== day) {
+      // the requested day is not in the schedule: show the one that is selected
+      res = { ...res, missing: true };
+    }
+    return { url: `https://docs.google.com/spreadsheets/d/${this.spreadsheetId}/edit#gid=${res.sheetId}`, sheetId: res.sheetId, selected: res.selected, missing: !!res.missing };
   }
 
   /**
@@ -874,7 +983,7 @@ export class GSheetsService {
       live = await this.refreshLiveChecks().catch((e) => {
         console.warn('Could not update the live schedule checks', e);
         return { ok: false, reason: 'error' };
-      });
+      });      await this.refreshDayView().catch((e) => console.warn('Could not update the Day View', e));
     }
     return { total: assignments.length, violations, marked: marks.length, liveChecks: live };
   }

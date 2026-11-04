@@ -39,6 +39,10 @@ The Schedule tab is coloured by division (10 colours, looked up from the Soldier
 
 Cooldown means the rest needed after finishing a shift of a post: the gap before the next shift must be at least the cooldown of the earlier shift's post. Both shifts of the pair are flagged. The helper formulas are checked in the unit tests with a spreadsheet engine against the app's rule engine on random schedules.
 
+### Day View
+
+After a schedule is saved the spreadsheet gets a **Day View** tab: pick a day in the dropdown in cell B1 and the table shows just that day, instantly, with formulas (no app needed). Shifts are repeated on every row they cover, so a night shift that started the evening before still shows at the top of the next day. In the app, **Scheduler -> Day in Sheets** builds the tab if needed and opens it on the day you are looking at. The tab is rebuilt on every save and by *Check schedule* (it keeps your selected day); if you change a post's shift length by hand, press *Check schedule*. Days are identified as `yyyy-mm-dd` so the dropdown means the same day in every spreadsheet locale.
+
 ### Tests
 
 - `npm test` - unit tests, including an in-memory fake of the Google Sheets API (`src/tests/helpers/fakeSheets.js`) used to test hand-edited and imported spreadsheets end to end.

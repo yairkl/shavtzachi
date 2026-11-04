@@ -119,6 +119,7 @@ describe.skipIf(!ENABLED)('requests conform to the Google Sheets v4 API', () => 
     const clash = (role) => ({ soldier_name: 'Daniel', post_name: 'Gate', role_id: role, start: '2025-03-14T06:00:00', end: '2025-03-14T14:00:00' });
     await service.saveAssignments('2025-03-14T06:00:00', '2025-03-15T06:00:00', [clash(0), clash(1)]);
     expect((await service.checkSchedule()).violations.length).toBeGreaterThan(0);
+    await service.openDayView('2025-03-14'); // the Day View tab: formulas, dropdown, hidden rows, colours
     await service.saveAssignments('2025-03-10T06:00:00', '2025-03-15T06:00:00', []); // clear everything
     await service.applyFormatting();
     await service.applyFormatting(); // second run also deletes + re-adds the app's own rules
