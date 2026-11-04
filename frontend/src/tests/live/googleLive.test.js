@@ -136,6 +136,21 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
     expect((await service.getSoldiers()).map((s) => s.name)).toContain('Dan');
   }, 60000);
 
+  it('the assignment dropdown is accepted by Google and read back as a soldier list', async () => {
+    const day = ['2025-03-24T06:00:00', '2025-03-25T06:00:00'];
+    await service.saveAssignments(day[0], day[1], [{ soldier_name: 'Dan', post_name: 'Gate', role_id: 0, start: '2025-03-24T06:00:00', end: '2025-03-24T14:00:00' }]);
+    service.clearCache();
+    const rule = await service._scheduleValidation('Schedule'); // read back from the sheet itself
+    expect(rule).toBeTruthy();
+    expect(rule.condition.type).toBe('ONE_OF_RANGE');
+    expect(rule.condition.values[0].userEnteredValue.replace(/'/g, '')).toMatch(/Soldiers!\$A\$2:\$A/);
+    expect(rule.strict).toBeFalsy(); // typing another name is still allowed
+    // saving again keeps it
+    await service.saveAssignments(day[0], day[1], [{ soldier_name: 'Dan', post_name: 'Gate', role_id: 0, start: '2025-03-24T06:00:00', end: '2025-03-24T14:00:00' }]);
+    expect((await service._scheduleValidation('Schedule')).condition.type).toBe('ONE_OF_RANGE');
+    await service.saveAssignments(day[0], day[1], []);
+  }, 120000);
+
   it('grows the grid for a schedule wider than the default 26 columns', async () => {
     const wide = Array.from({ length: 30 }, (_, i) => [`W${i + 1}`, '12', '0:00', '0:00', '0', '1', 'guard', 'TRUE', '', '']);
     await service.appendRows("'Posts'!A:J", wide);

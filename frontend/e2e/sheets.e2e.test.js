@@ -141,3 +141,19 @@ test('Excel export of a saved schedule downloads a real file, and the soldiers C
   assert.deepEqual(s.problems, []);
   await s.context.close();
 });
+
+test('saving from the app gives the Schedule tab a soldier dropdown over the whole schedule', async () => {
+  const s = await app.open(messySheet());
+  await s.go('/scheduler');
+  await s.page.getByRole('button', { name: /Auto Assign/ }).click();
+  await s.toast(/Assigned all/);
+  await s.page.getByRole('button', { name: /Save/ }).first().click();
+  await s.toast(/Saved \d+ assignment/);
+  const rules = s.fake.tab('Schedule').validations || [];
+  assert.equal(rules.length, 1);
+  assert.equal(rules[0].rule.condition.type, 'ONE_OF_RANGE');
+  assert.match(rules[0].rule.condition.values[0].userEnteredValue, /^='Soldiers'!\$A\$2:\$A$/);
+  assert.ok(rules[0].range.endRowIndex >= s.fake.rows('Schedule').length, 'covers every row of the schedule');
+  assert.deepEqual(s.problems, []);
+  await s.context.close();
+});

@@ -301,22 +301,16 @@ export function buildDivisionColoringRules(sheetId, extent = { rows: 1000, cols:
 }
 
 /**
- * Port of parse_grid
+ * Which post and role each column of the Schedule tab belongs to.
+ * Row 1 holds the post name (merged over its roles), row 2 the role labels. Google trims trailing blank
+ * cells per row, so the header row can be shorter than the data: the width comes from the longest row.
+ * Returns { colIndex: { name, role_id } }.
  */
-export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHours = 1) {
-  if (!gridRows || gridRows.length < 3) return [];
-
-  const mergeMap = {};
-  merges.forEach(m => {
-    mergeMap[`${m.startRowIndex}-${m.startColumnIndex}`] = m.endRowIndex;
-  });
-
+export function mapScheduleColumns(gridRows) {
   const val = (r, c) => gridRows[r]?.[c]?.toString().trim() || "";
-
   const colToPost = {};
-  let c = 2;
-  // Google trims trailing blank cells per row, so the header row can be shorter than the data.
   const width = Math.max(0, ...gridRows.map((row) => (row ? row.length : 0)));
+  let c = 2;
   while (c < width) {
     const pName = val(0, c);
     if (pName) {
@@ -333,6 +327,23 @@ export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHou
       c++;
     }
   }
+  return colToPost;
+}
+
+/**
+ * Port of parse_grid
+ */
+export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHours = 1) {
+  if (!gridRows || gridRows.length < 3) return [];
+
+  const mergeMap = {};
+  merges.forEach(m => {
+    mergeMap[`${m.startRowIndex}-${m.startColumnIndex}`] = m.endRowIndex;
+  });
+
+  const val = (r, c) => gridRows[r]?.[c]?.toString().trim() || "";
+
+  const colToPost = mapScheduleColumns(gridRows);
 
   const rowToDt = {};
   const rowStep = {}; // minutes per row, from the Time column label
@@ -381,8 +392,16 @@ export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHou
           }
           currR = endRow;
         } else {
-          currR = r + 1;
-          endDt = addMinutes(rowToDt[r], stepOf(r));
+          // Not merged (typed by hand): the shift lasts as long as its post's shift length, but never runs into
+          // the next filled cell of the same column or past the last row.
+          let span = 1;
+          const post = (activePosts || []).find((p) => String(p.name).trim().toLowerCase() === postInfo.name.toLowerCase());
+          if (post && post.shift_length_hours > 0) {
+            const want = Math.max(1, Math.round((post.shift_length_hours * 60) / stepOf(r)));
+            while (span < want && r + span < gridRows.length && !val(r + span, cIdx) && rowToDt[r + span]) span++;
+          }
+          currR = r + span;
+          endDt = addMinutes(rowToDt[r], span * stepOf(r));
         }
 
         assignments.push({

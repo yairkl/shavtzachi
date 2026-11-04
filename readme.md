@@ -26,6 +26,10 @@ npm test         # unit tests (Vitest)
 npm run build    # production build
 ```
 
+### Assigning by hand
+
+Every save puts a **soldier dropdown** (the names of the Soldiers tab) on all cells of the Schedule tab, empty slots included: click a cell, pick a name. It never blocks typing, and a dropdown you set up yourself is kept instead. A name picked into a single cell lasts for the shift length of its post (it stops before the next filled cell), so you do not need to merge cells by hand.
+
 ### Tests
 
 - `npm test` - unit tests, including an in-memory fake of the Google Sheets API (`src/tests/helpers/fakeSheets.js`) used to test hand-edited and imported spreadsheets end to end.

@@ -73,10 +73,12 @@ describe('a dropdown on the Schedule cells survives saving', () => {
     expect(last.range.endRowIndex).toBeGreaterThanOrEqual(fake.rows('Schedule').length);
   });
 
-  it('is not invented when the Schedule tab never had one', async () => {
+  it('a dropdown set up by hand is kept as it is (not replaced by the default)', async () => {
     const { service, fake } = await makeService(tabs({ Schedule: [['Date', 'Time', 'Gate'], ['', ''], ['10/03/2025', '06:00 - 10:00', 'Dan']] }));
+    fake.tab('Schedule').validations = [{ range: { sheetId: fake.tab('Schedule').properties.sheetId, startRowIndex: 2, endRowIndex: 40, startColumnIndex: 2, endColumnIndex: 10 }, rule: dropdown }];
     await service.saveAssignments(at(6), at(30), [asg('Dan', 'Gate', 6, 10)]);
-    expect(fake.tab('Schedule').validations).toBeUndefined();
+    const all = fake.tab('Schedule').validations;
+    expect(all[all.length - 1].rule).toEqual(dropdown);
   });
 
   it('a failure while reading the dropdown does not block saving', async () => {

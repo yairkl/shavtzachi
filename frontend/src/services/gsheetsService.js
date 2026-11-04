@@ -675,11 +675,28 @@ export class GSheetsService {
     // buildScheduleRequests starts with its own unmerge; ours already did that.
     const rest = built.filter((r) => !r.unmergeCells);
     const used = { rows: cells ? cells.rows.length : 3, cols: needCols > 0 ? needCols - 1 : 3 };
-    const restoreValidation = validation
-      ? [{ setDataValidation: { range: { sheetId, startRowIndex: 2, endRowIndex: Math.max(used.rows, 3), startColumnIndex: 2, endColumnIndex: Math.max(used.cols, 3) }, rule: validation } }]
+    // The assignment dropdown: pick a soldier for any cell of the schedule. A dropdown someone set up by hand is kept
+    // as it is; otherwise one listing the Soldiers tab's names is added. It never blocks typing (strict: false).
+    const { model, tabs: tabTitles } = await this.fetchAllData();
+    const rule = validation || this._assignmentDropdown(model, tabTitles);
+    const dropdown = rule
+      ? [{ setDataValidation: { range: { sheetId, startRowIndex: 2, endRowIndex: Math.max(used.rows, 3), startColumnIndex: 2, endColumnIndex: Math.max(used.cols, 3) }, rule } }]
       : [];
-    await this.batchUpdate([...resize, ...clearAll, ...rest, ...buildDivisionColoringRules(sheetId, used), ...restoreValidation]);
+    await this.batchUpdate([...resize, ...clearAll, ...rest, ...buildDivisionColoringRules(sheetId, used), ...dropdown]);
     this.clearCache();
+  }
+
+  /** A dropdown of the Soldiers tab's names (found by header, so reordered columns work), or null without a Soldiers tab. */
+  _assignmentDropdown(model, tabs) {
+    const col = model.columns.Soldiers?.name;
+    if (!tabs.Soldiers || col === undefined) return null;
+    const letter = colLetter(col);
+    return {
+      condition: { type: 'ONE_OF_RANGE', values: [{ userEnteredValue: `=${quoteTab(tabs.Soldiers)}!$${letter}$2:$${letter}` }] },
+      inputMessage: 'Pick a soldier',
+      strict: false,
+      showCustomUi: true,
+    };
   }
 
   /** The first data-validation rule (dropdown) found in the Schedule cells, or null. */
