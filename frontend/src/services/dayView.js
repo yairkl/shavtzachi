@@ -63,6 +63,30 @@ export function rowDays(grid, first, last) {
   return out;
 }
 
+export const MAX_JUMP_DAYS = 366;
+
+/**
+ * Every day of the Schedule tab with its rows: [{ day, startRow, endRow }] (1-based sheet rows), in order.
+ * Used for the jump links and the Name Box shortcuts, so it covers the whole tab, not just the Day View window.
+ */
+export function dayRanges(grid) {
+  const lastRow = grid.length;
+  if (lastRow < FIRST_ROW) return [];
+  const days = rowDays(grid, FIRST_ROW, lastRow);
+  const out = [];
+  days.forEach((day, i) => {
+    if (!day) return;
+    const s = FIRST_ROW + i;
+    const last = out[out.length - 1];
+    if (last && last.day === day) last.endRow = s;
+    else out.push({ day, startRow: s, endRow: s });
+  });
+  return out;
+}
+
+/** The Name Box shortcut for a day: Day_2025_03_10 */
+export const dayName = (day) => `Day_${String(day).replace(/[^A-Za-z0-9]/g, '_')}`;
+
 /** Plan the Day View for a Schedule grid; null when there is nothing to show. */
 export function planDayView(grid, posts) {
   const plan = planLiveChecks(grid, posts, { maxRows: DAY_MAX_ROWS });
@@ -89,20 +113,21 @@ export const layerRows = (p) => ({
   who: (s) => p.base + 2 * (p.rows + 2) + (s - p.first),
 });
 
-export const daysColumn = (p) => Math.max(...p.columns.map((c) => c.index)) + 3; // 0-based index of the day list column
+export const daysColumn = (p) => Math.max(...p.columns.map((c) => c.index)) + 3; // 0-based index of the day list column (the clickable list is two columns further)
 
 /**
  * The cells of the Day View tab as a 2D array of strings (formulas start with "=").
  * `selected` is the day written into B1.
  */
-export function buildDayViewCells(p, scheduleTitle, selected) {
+export function buildDayViewCells(p, scheduleTitle, selected, scheduleGid = null, jumpDays = []) {
   const sched = q(scheduleTitle);
   const L = layerRows(p);
   const lastS = p.lastRow;
   const width = Math.max(...p.columns.map((c) => c.index)) + 1;
   const dcol = daysColumn(p);
   const height = L.who(lastS);
-  const cells = Array.from({ length: height }, () => Array(Math.max(width, dcol + 1)).fill(''));
+  const height2 = Math.max(height, 4 + Math.min(jumpDays.length, MAX_JUMP_DAYS));
+  const cells = Array.from({ length: height2 }, () => Array(Math.max(width, dcol + 3)).fill(''));
   const set = (row1, col, v) => { cells[row1 - 1][col] = v; };
 
   const KEY = `$A$${L.key(p.first)}:$A$${L.key(lastS)}`;
@@ -116,6 +141,11 @@ export function buildDayViewCells(p, scheduleTitle, selected) {
   // B1 may hold text or a real date (Google Sheets converts a date-like pick); H1 is its yyyy-mm-dd key
   set(1, 6, 'key');
   set(1, 7, '=IF(ISNUMBER($B$1),TEXT($B$1,"yyyy-mm-dd"),TRIM($B$1))');
+
+  // jump to the chosen day in the Schedule tab (to edit it there)
+  if (scheduleGid !== null) {
+    set(2, 1, `=IF($D$1=0,"",HYPERLINK("#gid=${scheduleGid}&range=A"&(${p.first}+$D$1-1),"Open "&$H$1&" in the Schedule tab ▸"))`);
+  }
 
   // headers (copied from the Schedule tab)
   set(3, 0, 'Date');
@@ -137,6 +167,14 @@ export function buildDayViewCells(p, scheduleTitle, selected) {
   // the list of days for the dropdown
   set(3, dcol, 'Days');
   set(4, dcol, `=IFERROR(UNIQUE(FILTER(${KEY},${KEY}<>"")),"")`);
+
+  // a clickable list of every day: one click jumps to that day in the Schedule tab
+  if (scheduleGid !== null) {
+    set(3, dcol + 2, 'Jump to a day');
+    jumpDays.slice(-MAX_JUMP_DAYS).forEach((d, i) => {
+      set(4 + i, dcol + 2, `=HYPERLINK("#gid=${scheduleGid}&range=A${d.startRow}","${d.day}")`);
+    });
+  }
 
   // hidden helper layers
   set(L.key(p.first) - 1, 0, 'Helper layers (hidden): day of each Schedule row, position within a shift, who is on duty.');

@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { getSoldiers, getPosts, getShiftsWithAssignments, draftSchedule, saveSchedule, getCandidates, getUnavailabilities, exportSchedule, openDayView } from '@/services/api';
+import { getSoldiers, getPosts, getShiftsWithAssignments, draftSchedule, saveSchedule, getCandidates, getUnavailabilities, exportSchedule, openDayView, getScheduleDayUrl } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import { notify } from '@/lib/notify';
 import { describeError } from '@/lib/errors';
 import { DiagnosticsBanner } from '@/components/SheetHealth';
 import { diagnoseInputs, summarizeUnfilled } from '@/lib/schedulerCore';
 import { validateAssignments, buildWarningMap } from '@/lib/scheduleValidation';
-import { Save, RefreshCw, ChevronLeft, ChevronRight, User, Users, LayoutGrid, CheckCircle2, GripVertical, Wand2, X, PanelRightClose, PanelRight, AlertTriangle, ShieldAlert, Filter, Ban, CalendarX, Clock4, ShieldCheck, FileSpreadsheet, Table2 } from 'lucide-react';
+import { Save, RefreshCw, ChevronLeft, ChevronRight, User, Users, LayoutGrid, CheckCircle2, GripVertical, Wand2, X, PanelRightClose, PanelRight, AlertTriangle, ShieldAlert, Filter, Ban, CalendarX, Clock4, ShieldCheck, FileSpreadsheet, Table2, ExternalLink } from 'lucide-react';
 import { addDays, addHours, format, startOfToday, startOfDay, parseISO, isBefore, differenceInMinutes } from 'date-fns';
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -336,6 +336,22 @@ export default function Scheduler() {
     }
   };
 
+  // Open the Schedule tab of the spreadsheet scrolled to the day shown here, to edit it directly.
+  const handleEditInSheets = async () => {
+    const tab = window.open('', '_blank');
+    setLoading(true);
+    try {
+      const { dayStart } = getDayBounds();
+      const res = await getScheduleDayUrl(format(dayStart, 'yyyy-MM-dd'));
+      if (tab) tab.location.href = res.url; else window.open(res.url, '_blank');
+    } catch (e) {
+      if (tab) tab.close();
+      notify.error(describeError(e, 'Could not open the day in the spreadsheet.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // --- Drag and Drop ---
   const handleDragStart = (e, soldier) => {
     e.dataTransfer.setData('application/json', JSON.stringify({ soldier_id: soldier.id, soldier_name: soldier.name }));
@@ -576,6 +592,9 @@ export default function Scheduler() {
             <div className="flex items-center gap-2">
               <Button onClick={handleExport} variant="outline" className="h-8 px-3 sm:px-4 text-[11px] gap-1.5 border-white/10 hover:bg-white/5 rounded-full text-slate-300">
                 <FileSpreadsheet className="w-3.5 h-3.5" /> <span className="font-bold hidden sm:inline">Excel</span>
+              </Button>
+              <Button onClick={handleEditInSheets} disabled={loading} variant="outline" title="Open the Schedule tab of the spreadsheet at this day, to edit it there" className="h-8 px-3 sm:px-4 text-[11px] gap-1.5 border-white/10 hover:bg-white/5 rounded-full text-slate-300">
+                <ExternalLink className="w-3.5 h-3.5" /> <span className="font-bold hidden sm:inline">Edit in Sheets</span>
               </Button>
               <Button onClick={handleDayView} disabled={loading} variant="outline" title="Open this day in the spreadsheet's Day View tab" className="h-8 px-3 sm:px-4 text-[11px] gap-1.5 border-white/10 hover:bg-white/5 rounded-full text-slate-300">
                 <Table2 className="w-3.5 h-3.5" /> <span className="font-bold hidden sm:inline">Day in Sheets</span>

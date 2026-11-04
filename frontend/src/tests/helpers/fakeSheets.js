@@ -33,6 +33,8 @@ export class FakeSheets {
     this.sheets = [];
     this.calls = [];
     this.failNextBatch = null;
+    this.namedRanges = [];
+    this.nextNamedId = 1;
     Object.entries(tabs).forEach(([title, values]) => this._addSheet(title, values));
   }
 
@@ -91,7 +93,7 @@ export class FakeSheets {
     }
     let m = url.match(/^\/[^/?]+\?fields=/);
     if (m) {
-      return { data: { properties: { locale: this.locale }, sheets: this.sheets.map((s) => ({ properties: { ...s.properties, gridProperties: { ...s.properties.gridProperties } }, merges: [...s.merges], conditionalFormats: [...s.conditionalFormats] })) } };
+      return { data: { properties: { locale: this.locale }, namedRanges: this.namedRanges.map((n) => ({ ...n })), sheets: this.sheets.map((s) => ({ properties: { ...s.properties, gridProperties: { ...s.properties.gridProperties } }, merges: [...s.merges], conditionalFormats: [...s.conditionalFormats] })) } };
     }
     m = url.match(/^\/[^/?]+\/values:batchGet\?(.*)$/);
     if (m) {
@@ -145,6 +147,7 @@ export class FakeSheets {
   async _batch(requests) {
     if (this.failNextBatch) { const e = this.failNextBatch; this.failNextBatch = null; throw e; }
     const snapshot = JSON.stringify(this.sheets);
+    const namedSnapshot = JSON.stringify(this.namedRanges);
     const replies = [];
     try {
       for (const req of requests) {
@@ -158,6 +161,14 @@ export class FakeSheets {
             replies.push({ addSheet: { properties: JSON.parse(JSON.stringify(s.properties)) } });
             continue;
           }
+          case 'addNamedRange': {
+            if (this.namedRanges.some((n) => n.name === arg.namedRange.name)) throw apiError(400, `A named range with the name "${arg.namedRange.name}" already exists.`);
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(arg.namedRange.name)) throw apiError(400, `Invalid named range name "${arg.namedRange.name}".`);
+            this.namedRanges.push({ namedRangeId: `nr${this.nextNamedId++}`, ...arg.namedRange });
+            replies.push({});
+            continue;
+          }
+          case 'deleteNamedRange': this.namedRanges = this.namedRanges.filter((n) => n.namedRangeId !== arg.namedRangeId); replies.push({}); continue;
           case 'deleteSheet': this.sheets = this.sheets.filter((x) => x.properties.sheetId !== arg.sheetId); break;
           case 'unmergeCells': sheet.merges = []; break;
           case 'repeatCell':
@@ -208,6 +219,7 @@ export class FakeSheets {
       }
     } catch (e) {
       this.sheets = JSON.parse(snapshot); // batchUpdate is atomic
+      this.namedRanges = JSON.parse(namedSnapshot);
       throw e;
     }
     return { data: { replies } };

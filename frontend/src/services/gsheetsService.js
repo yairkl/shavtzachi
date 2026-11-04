@@ -4,7 +4,7 @@ import { notify } from '../lib/notify';
 import { buildFormattingRequests, isOurRule } from './sheetFormatting';
 import { parseGrid, buildScheduleRequests, buildDivisionColoringRules, buildViolationMarkRequests } from './gsheetsUtils';
 import { validateAssignments } from '../lib/scheduleValidation';
-import { DAY_TAB, OUT_FIRST_ROW, planDayView, buildDayViewCells, dayViewSize, daysColumn, layerRows, dayKey } from './dayView';
+import { DAY_TAB, OUT_FIRST_ROW, planDayView, buildDayViewCells, dayViewSize, daysColumn, layerRows, dayKey, dayRanges, dayName, MAX_JUMP_DAYS } from './dayView';
 import { CHECK_TAB, planLiveChecks, buildLiveCheckCells, buildLiveCheckRules, isLiveCheckRule, estimateSize, MAX_FORMULA_CHARS } from './liveChecks';
 import { TABS, COLUMN_SPECS, buildModel, mapColumns, composeRow, colLetter, normalizeKey, toSheetDateTime } from '../lib/sheetModel';
 import { parseISO, differenceInSeconds, isBefore, isAfter } from 'date-fns';
@@ -189,7 +189,7 @@ export class GSheetsService {
 
     // Look at which tabs exist first, so a missing tab never breaks the whole read.
     const metadataResp = await this.client.get(
-      `/${this.spreadsheetId}?fields=properties(locale),sheets(properties(title,sheetId,gridProperties),merges,conditionalFormats)`
+      `/${this.spreadsheetId}?fields=properties(locale),namedRanges,sheets(properties(title,sheetId,gridProperties),merges,conditionalFormats)`
     );
     const sheets = metadataResp.data.sheets || [];
     const tabs = this._resolveTabs(sheets);
@@ -215,6 +215,7 @@ export class GSheetsService {
       model,
       tabs,
       metadata: sheets,
+      namedRanges: metadataResp.data.namedRanges || [],
       lastFetch: now,
       assignments: null,
     };
@@ -775,7 +776,10 @@ export class GSheetsService {
       selected = plan.dayList.includes(today) ? today : plan.dayList[plan.dayList.length - 1];
     }
 
-    const cells = buildDayViewCells(plan, scheduleTitle, selected);
+    const scheduleMeta = cache.metadata.find((m) => m.properties.title === scheduleTitle);
+    const scheduleGid = scheduleMeta.properties.sheetId;
+    const jumpDays = dayRanges(cache.raw.Schedule);
+    const cells = buildDayViewCells(plan, scheduleTitle, selected, scheduleGid, jumpDays);
     if (dayViewSize(cells) > 5_000_000) return { ok: false, reason: 'too-large' };
 
     const soldiers = this._soldiersRef(cache.model, cache.tabs);
@@ -831,7 +835,22 @@ export class GSheetsService {
       // the helper layers are hidden
       { updateDimensionProperties: { range: { sheetId, dimension: 'ROWS', startIndex: L.key(plan.first) - 2, endIndex: height }, properties: { hiddenByUser: true }, fields: 'hiddenByUser' } },
       ...buildDivisionColoringRules(sheetId, soldiers, { rowCount: OUT_FIRST_ROW - 1 + plan.outRows, columnCount: width }, { row: OUT_FIRST_ROW - 1, col: 2 }),
+      // the day list's links need room
+      { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: dcol + 2, endIndex: dcol + 3 }, properties: { pixelSize: 140 }, fields: 'pixelSize' } },
     );
+
+    // In the Schedule tab: a "jump" link in the frozen header corner, and a Name Box shortcut per day (Day_2025_03_10)
+    requests.push({
+      updateCells: {
+        range: { sheetId: scheduleGid, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 1 },
+        rows: [{ values: [{ userEnteredValue: { formulaValue: `=HYPERLINK("#gid=${sheetId}&range=${colLetter(dcol + 2)}3","Date ▸ jump to a day")` } }] }],
+        fields: 'userEnteredValue',
+      },
+    });
+    (cache.namedRanges || []).filter((n) => /^Day_/.test(n.name)).forEach((n) => requests.push({ deleteNamedRange: { namedRangeId: n.namedRangeId } }));
+    jumpDays.slice(-MAX_JUMP_DAYS).forEach((d) => requests.push({
+      addNamedRange: { namedRange: { name: dayName(d.day), range: { sheetId: scheduleGid, startRowIndex: d.startRow - 1, endRowIndex: d.endRow, startColumnIndex: 0, endColumnIndex: width } } },
+    }));
 
     await this.batchUpdate(requests);
     this.clearCache();
@@ -854,6 +873,21 @@ export class GSheetsService {
       res = { ...res, missing: true };
     }
     return { url: `https://docs.google.com/spreadsheets/d/${this.spreadsheetId}/edit#gid=${res.sheetId}`, sheetId: res.sheetId, selected: res.selected, missing: !!res.missing };
+  }
+
+  /**
+   * The address of a day inside the Schedule tab (its first row), for editing it there.
+   * Returns { url, row, sheetId } or throws a readable error when the day is not in the saved schedule.
+   */
+  async scheduleDayUrl(day) {
+    this.clearCache();
+    const cache = await this.fetchAllData();
+    const title = cache.tabs.Schedule;
+    const sheet = title ? cache.metadata.find((m) => m.properties.title === title) : null;
+    if (!sheet) throw new Error('There is no saved schedule yet. Save a schedule first.');
+    const found = dayRanges(cache.raw.Schedule).find((d) => d.day === day);
+    if (!found) throw new Error(`${day} is not in the saved schedule. Save that day first.`);
+    return { url: `https://docs.google.com/spreadsheets/d/${this.spreadsheetId}/edit#gid=${sheet.properties.sheetId}&range=A${found.startRow}`, row: found.startRow, sheetId: sheet.properties.sheetId };
   }
 
   /**

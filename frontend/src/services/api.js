@@ -278,3 +278,6 @@ export const getAuthStatus = async () => {
 
 /** Build the Day View tab (a day picker inside the spreadsheet) and return its address, set to `day` ("yyyy-MM-dd"). */
 export const openDayView = (day) => gsheetsService.openDayView(day);
+
+/** Address of a day ("yyyy-MM-dd") inside the Schedule tab, for editing it there. */
+export const getScheduleDayUrl = (day) => gsheetsService.scheduleDayUrl(day);

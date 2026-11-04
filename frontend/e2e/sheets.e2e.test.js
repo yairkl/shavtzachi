@@ -250,3 +250,25 @@ test('"Day in Sheets" builds the Day View for the day on screen and opens it', a
   assert.deepEqual(s.problems, []);
   await s.context.close();
 });
+
+test('"Edit in Sheets" opens the Schedule tab at the first row of the day on screen', async () => {
+  const s = await app.open(messySheet());
+  await s.context.route('https://docs.google.com/**', (r) => r.fulfill({ status: 200, contentType: 'text/html', body: '<title>sheet</title>' }));
+  await s.go('/scheduler');
+  await s.page.getByRole('button', { name: /Auto Assign/ }).click();
+  await s.toast(/Assigned all/);
+  await s.page.getByRole('button', { name: /Save/ }).first().click();
+  await s.toast(/Saved \d+ assignment/);
+
+  const [popup] = await Promise.all([s.context.waitForEvent('page'), s.page.getByRole('button', { name: /Edit in Sheets/ }).click()]);
+  await popup.waitForURL(/edit#gid=\d+&range=A\d+/);
+  const gid = Number(popup.url().match(/gid=(\d+)/)[1]);
+  const row = Number(popup.url().match(/range=A(\d+)/)[1]);
+  assert.equal(gid, s.fake.tab('Schedule').properties.sheetId);
+  const today = new Date();
+  const label = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
+  assert.equal(s.fake.rows('Schedule')[row - 1][0], label, 'the row it jumps to is the first row of today');
+  assert.ok(s.fake.namedRanges.some((n) => n.name.startsWith('Day_')), 'Name Box shortcuts exist');
+  assert.deepEqual(s.problems, []);
+  await s.context.close();
+});

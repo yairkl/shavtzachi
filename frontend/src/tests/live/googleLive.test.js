@@ -230,6 +230,17 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
     expect(text).toContain('Gil'); // the Clinic night shift started the evening before and is still on duty after midnight
     expect(text).toContain('Dan');
     expect(shown.every((r) => !r[0] || r[0].includes('2025-03-30'))).toBe(true);
+    // jumping: Name Box shortcuts exist for the days, and (on real Google) the day list shows clickable day names
+    service.clearCache();
+    const named = (await service.fetchAllData()).namedRanges.map((n) => n.name);
+    expect(named).toEqual(expect.arrayContaining(['Day_2025_03_29', 'Day_2025_03_30']));
+    if (MODE === 'live') {
+      const grid = await service.fetchSheetValues(`'${DAY_TAB}'!A3:Z40`);
+      const column = grid.map((r) => r.find((v) => /^2025-03-\d\d$/.test(v)));
+      expect(column.filter(Boolean)).toEqual(expect.arrayContaining(['2025-03-29', '2025-03-30']));
+      const corner = await service.fetchSheetValues("'Schedule'!A1:A1");
+      expect(corner[0][0]).toContain('jump to a day');
+    }
     await service.saveAssignments('2025-03-29T00:00:00', '2025-03-31T00:00:00', []);
   }, 120000);
 

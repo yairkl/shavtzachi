@@ -36,7 +36,7 @@ function engine(fake) {
     shown: () => {
       const out = {};
       for (let r = OUT_FIRST_ROW; val(r, 1) !== '' && val(r, 1) !== null; r++) {
-        out[val(r, 1)] = Object.fromEntries(header.map((h, c) => [h, val(r, c)]).filter(([h, v], i) => i > 1 && h && h !== 'Days' && v !== '' && v !== null));
+        out[val(r, 1)] = Object.fromEntries(header.map((h, c) => [h, val(r, c)]).filter(([h, v], i) => i > 1 && h && h !== 'Days' && h !== 'Jump to a day' && v !== '' && v !== null));
       }
       return out;
     },
