@@ -1,0 +1,54 @@
+name: Live Google test
+
+# Runs the smoke test against the REAL Google Sheets API (frontend/src/tests/live/googleLive.test.js).
+# It authenticates as a service account: a fresh, short-lived access token is created on every run, so there is
+# nothing permanent to rotate and no personal Google account involved. The test creates its own throw-away
+# spreadsheet in the service account's Drive and deletes it afterwards.
+#
+# Not run on pull requests: forks cannot read secrets, and the test writes to a real Google account.
+# See "Running the live test in CI" in the readme for the one-time setup.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * 1' # Mondays 04:17 UTC, only when the repository variable GOOGLE_LIVE_TESTS is 'true'
+
+permissions:
+  contents: read
+  id-token: write # only used if you switch to keyless Workload Identity Federation (see the readme)
+
+concurrency: live-google-test
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    # Manual runs always go; scheduled runs only after the secret has been set up and the variable enabled.
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.GOOGLE_LIVE_TESTS == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Get a short-lived Google access token
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GOOGLE_SA_KEY }}
+          token_format: access_token
+          access_token_scopes: >-
+            https://www.googleapis.com/auth/spreadsheets,
+            https://www.googleapis.com/auth/drive
+
+      - name: Live test against Google Sheets
+        working-directory: frontend
+        env:
+          GOOGLE_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: npm run test:live
