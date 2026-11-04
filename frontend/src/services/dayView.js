@@ -22,6 +22,8 @@ import { planLiveChecks, FIRST_ROW } from './liveChecks';
 
 export const DAY_TAB = 'Day View';
 export const DAY_MAX_ROWS = 1500;
+// Two formulas per column per row (position, who) plus one per row: keep the Day View's helper layers within this many.
+export const DAY_FORMULA_BUDGET = 12000;
 export const OUT_FIRST_ROW = 5; // first output row
 
 const q = (title) => `'${String(title).replace(/'/g, "''")}'`;
@@ -89,7 +91,9 @@ export const dayName = (day) => `Day_${String(day).replace(/[^A-Za-z0-9]/g, '_')
 
 /** Plan the Day View for a Schedule grid; null when there is nothing to show. */
 export function planDayView(grid, posts) {
-  const plan = planLiveChecks(grid, posts, { maxRows: DAY_MAX_ROWS });
+  const wide = planLiveChecks(grid, posts, { maxRows: DAY_MAX_ROWS });
+  if (!wide) return null;
+  const plan = planLiveChecks(grid, posts, { maxRows: Math.max(24, Math.min(DAY_MAX_ROWS, Math.floor(DAY_FORMULA_BUDGET / (2 * wide.columns.length + 1)))) });
   if (!plan) return null;
   // Start the window on the first row of a day, so every row in it has a day.
   let first = plan.firstRow;

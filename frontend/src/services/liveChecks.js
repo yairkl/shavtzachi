@@ -30,6 +30,13 @@ const MAX_FORMULA_CHARS = 5_000_000; // keep one request comfortably below Googl
 // The Schedule tab keeps every saved day. Only the most recent rows get live checks (about two weeks of hourly
 // rows); older days are still covered by "Check schedule".
 export const MAX_ROWS = 336;
+// Speed: every checked cell costs about three formulas (position, who, flags). Beyond this many formulas the spreadsheet
+// gets noticeably slow (especially in the phone app), so wide schedules check fewer of the most recent rows.
+export const FORMULA_BUDGET = 9000;
+
+/** How many of the most recent rows can be checked live for this many Schedule columns. */
+export const rowsForBudget = (columnCount, budget = FORMULA_BUDGET, cap = MAX_ROWS) =>
+  Math.max(24, Math.min(cap, Math.floor(budget / (3 * Math.max(1, columnCount)))));
 
 const q = (title) => `'${String(title).replace(/'/g, "''")}'`;
 
@@ -51,7 +58,7 @@ export function rowMinutes(grid) {
  * Work out, per Schedule column, how many rows a shift covers (n) and how many rows of rest are
  * required (k). Returns null when there is nothing to check.
  */
-export function planLiveChecks(grid, posts, { maxRows = MAX_ROWS } = {}) {
+export function planLiveChecks(grid, posts, { maxRows = null, budget = FORMULA_BUDGET } = {}) {
   if (!grid || grid.length < FIRST_ROW) return null;
   const colToPost = mapScheduleColumns(grid);
   const indexes = Object.keys(colToPost).map(Number).sort((a, b) => a - b);
@@ -68,7 +75,8 @@ export function planLiveChecks(grid, posts, { maxRows = MAX_ROWS } = {}) {
     return { index, letter: colLetter(index), post: info.name, role: info.role_id, n, k };
   });
   const rows = lastRow - FIRST_ROW + 1;
-  const firstRow = Math.max(FIRST_ROW, lastRow - maxRows + 1);
+  const limit = maxRows ?? rowsForBudget(columns.length, budget);
+  const firstRow = Math.max(FIRST_ROW, lastRow - limit + 1);
   return { columns, rows, lastRow, firstRow, step, offset: rows + 3 };
 }
 
@@ -182,14 +190,16 @@ export function estimateSize(cells) {
  * Conditional-format rules for the Schedule tab that colour cells by the helper tab's flags.
  * Red = double-booked, amber = cooldown only. They are recognisable by the helper tab's name.
  */
-export function buildLiveCheckRules(sheetId, plan, grid = { rowCount: 1000, columnCount: 100 }) {
+export function buildLiveCheckRules(sheetId, plan) {
+  // INDIRECT is recalculated on every change, so colour exactly the block that is checked (not the whole 1000 x 100 grid)
+  // and ask it once per rule. The flag cells hold exactly "D", "C" or nothing.
   const ref = `INDIRECT(${JSON.stringify(`${q(CHECK_TAB)}!`)}&ADDRESS(ROW()+${2 * plan.offset},COLUMN(),4))`;
   const range = {
     sheetId,
     startRowIndex: plan.firstRow - 1,
-    endRowIndex: Math.max(grid.rowCount || 1000, plan.lastRow),
-    startColumnIndex: 2,
-    endColumnIndex: Math.max(grid.columnCount || 100, Math.max(...plan.columns.map((c) => c.index)) + 1),
+    endRowIndex: plan.lastRow,
+    startColumnIndex: Math.min(...plan.columns.map((c) => c.index)),
+    endColumnIndex: Math.max(...plan.columns.map((c) => c.index)) + 1,
   };
   const rule = (formula, format, index) => ({
     addConditionalFormatRule: {
@@ -198,8 +208,8 @@ export function buildLiveCheckRules(sheetId, plan, grid = { rowCount: 1000, colu
     },
   });
   return [
-    rule(`=AND(NOT(ISNUMBER(SEARCH("D",${ref}))),ISNUMBER(SEARCH("C",${ref})))`, { backgroundColor: { red: 1, green: 0.92, blue: 0.7 }, textFormat: { bold: true } }, 0),
-    rule(`=ISNUMBER(SEARCH("D",${ref}))`, { backgroundColor: { red: 0.96, green: 0.78, blue: 0.78 }, textFormat: { bold: true } }, 0),
+    rule(`=${ref}="C"`, { backgroundColor: { red: 1, green: 0.92, blue: 0.7 }, textFormat: { bold: true } }, 0),
+    rule(`=${ref}="D"`, { backgroundColor: { red: 0.96, green: 0.78, blue: 0.78 }, textFormat: { bold: true } }, 0),
   ];
 }
 

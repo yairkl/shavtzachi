@@ -49,6 +49,7 @@ describe('jumping around a long schedule', () => {
   it('puts a "jump to a day" link in the Schedule header corner that leads to the clickable day list', async () => {
     const { service, fake } = await makeService(tabs());
     await service.saveAssignments(at(10, 6), at(12, 6), [asg('Dan', 10, 6, 14), asg('Eli', 11, 6, 14)]);
+    await service.refreshDayView(); // the Day View is built on demand ("Day in Sheets"), then kept up to date by saves
     const a1 = fake.tab('Schedule').values[0][0];
     const dayViewGid = fake.tab(DAY_TAB).properties.sheetId;
     expect(a1).toMatch(new RegExp(`^=HYPERLINK\\("#gid=${dayViewGid}&range=[A-Z]+3","Date ▸ jump to a day"\\)$`));
@@ -57,6 +58,7 @@ describe('jumping around a long schedule', () => {
   it('the Schedule tab is still read correctly with that link in the corner', async () => {
     const { service } = await makeService(tabs());
     await service.saveAssignments(at(10, 6), at(12, 6), [asg('Dan', 10, 6, 14), asg('Eli', 11, 6, 14)]);
+    await service.refreshDayView(); // the Day View is built on demand ("Day in Sheets"), then kept up to date by saves
     service.clearCache();
     const back = await service.getAssignmentsInRange('2025-03-01T00:00:00', '2025-04-01T00:00:00');
     expect(back.map((x) => x.soldier_name).sort()).toEqual(['Dan', 'Eli']);
@@ -67,6 +69,7 @@ describe('jumping around a long schedule', () => {
   it('lists every day in the Day View as a link to the first row of that day', async () => {
     const { service, fake } = await makeService(tabs());
     await service.saveAssignments(at(10, 6), at(13, 6), [asg('Dan', 10, 6, 14), asg('Eli', 11, 6, 14), asg('Dan', 12, 6, 14)]);
+    await service.refreshDayView(); // the Day View is built on demand ("Day in Sheets"), then kept up to date by saves
     const scheduleGid = fake.tab('Schedule').properties.sheetId;
     const grid = fake.rows('Schedule');
     const expected = dayRanges(grid);
@@ -81,6 +84,7 @@ describe('jumping around a long schedule', () => {
   it('"Open <day> in the Schedule tab" follows the day chosen in the dropdown (evaluated)', async () => {
     const { service, fake } = await makeService(tabs());
     await service.saveAssignments(at(10, 6), at(13, 6), [asg('Dan', 10, 6, 14), asg('Eli', 11, 6, 14), asg('Dan', 12, 6, 14)]);
+    await service.refreshDayView(); // the Day View is built on demand ("Day in Sheets"), then kept up to date by saves
     const scheduleGid = fake.tab('Schedule').properties.sheetId;
     const cell = fake.rows(DAY_TAB)[1][1];
     expect(cell).toContain(`HYPERLINK("#gid=${scheduleGid}&range=A"`);
@@ -99,6 +103,7 @@ describe('jumping around a long schedule', () => {
   it('adds a Name Box shortcut per day covering exactly that day, and replaces them on every save', async () => {
     const { service, fake } = await makeService(tabs());
     await service.saveAssignments(at(10, 6), at(13, 6), [asg('Dan', 10, 6, 14), asg('Eli', 11, 6, 14), asg('Dan', 12, 6, 14)]);
+    await service.refreshDayView(); // the Day View is built on demand ("Day in Sheets"), then kept up to date by saves
     expect(fake.namedRanges.map((n) => n.name)).toEqual(['Day_2025_03_10', 'Day_2025_03_11', 'Day_2025_03_12']);
     const grid = fake.rows('Schedule');
     for (const n of fake.namedRanges) {
@@ -116,12 +121,14 @@ describe('jumping around a long schedule', () => {
     const { service, fake } = await makeService(tabs());
     fake.namedRanges.push({ namedRangeId: 'mine', name: 'My_Range', range: { sheetId: 1, startRowIndex: 0, endRowIndex: 2, startColumnIndex: 0, endColumnIndex: 2 } });
     await service.saveAssignments(at(10, 6), at(12, 6), [asg('Dan', 10, 6, 14)]);
+    await service.refreshDayView(); // the Day View is built on demand ("Day in Sheets"), then kept up to date by saves
     expect(fake.namedRanges.some((n) => n.name === 'My_Range')).toBe(true);
   });
 
   it('works for a 120-day schedule: every day linked, the most recent shortcuts kept, nothing breaks', async () => {
     const { service, fake } = await makeService(tabs());
     await service.saveAssignments(new Date(2025, 0, 1).toISOString(), new Date(2025, 4, 1).toISOString(), hundredDays());
+    await service.refreshDayView(); // the Day View is built on demand ("Day in Sheets"), then kept up to date by saves
     const grid = fake.rows('Schedule');
     const days = dayRanges(grid);
     expect(days).toHaveLength(120); // the saved window (Jan 1 - May 1) is the grid: empty days are rows too
@@ -136,6 +143,7 @@ describe('jumping around a long schedule', () => {
   it('scheduleDayUrl opens the Schedule tab at the first row of the day', async () => {
     const { service, fake } = await makeService(tabs());
     await service.saveAssignments(at(10, 6), at(13, 6), [asg('Dan', 10, 6, 14), asg('Eli', 11, 6, 14), asg('Dan', 12, 6, 14)]);
+    await service.refreshDayView(); // the Day View is built on demand ("Day in Sheets"), then kept up to date by saves
     const res = await service.scheduleDayUrl(key(11));
     const row = dayRanges(fake.rows('Schedule')).find((d) => d.day === key(11)).startRow;
     expect(res.row).toBe(row);

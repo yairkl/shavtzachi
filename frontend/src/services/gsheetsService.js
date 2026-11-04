@@ -775,7 +775,9 @@ export class GSheetsService {
       console.warn('Could not update the live schedule checks', e);
       return { ok: false, reason: 'error' };
     });
-    await this.refreshDayView().catch((e) => console.warn('Could not update the Day View', e));
+    // the Day View is thousands of formulas: keep it up to date only for people who use it (it is built by "Day in Sheets")
+    await this.refreshDayView({ onlyIfBuilt: true }).catch((e) => console.warn('Could not update the Day View', e));
+    await this.refreshDayShortcuts().catch((e) => console.warn('Could not update the day shortcuts', e)); // cheap: Name Box shortcuts, no formulas
     await this.refreshAssignmentLists().catch((e) => console.warn('Could not update the assignment dropdowns', e));
     return { violations, liveChecks: live };
   }
@@ -785,11 +787,12 @@ export class GSheetsService {
    * so picking another day in the sheet updates it instantly. Keeps the day currently selected when it still exists.
    * Pass `day` ("yyyy-mm-dd") to select a day. Returns { ok, sheetId?, selected?, reason? }.
    */
-  async refreshDayView({ day } = {}) {
+  async refreshDayView({ day, onlyIfBuilt = false } = {}) {
     this.clearCache();
     const cache = await this.fetchAllData();
     const scheduleTitle = cache.tabs.Schedule;
     if (!scheduleTitle) return { ok: false, reason: 'no-schedule' };
+    if (onlyIfBuilt && !cache.metadata.some((m) => m.properties.title === DAY_TAB)) return { ok: false, reason: 'not-built' };
     const plan = planDayView(cache.raw.Schedule, cache.model.posts);
     const existing = cache.metadata.find((m) => m.properties.title === DAY_TAB);
     if (!plan) return { ok: false, reason: 'empty-schedule', sheetId: existing?.properties.sheetId };
@@ -1022,6 +1025,23 @@ export class GSheetsService {
    * The address of a day inside the Schedule tab (its first row), for editing it there.
    * Returns { url, row, sheetId } or throws a readable error when the day is not in the saved schedule.
    */
+  async refreshDayShortcuts() {
+    this.clearCache();
+    const cache = await this.fetchAllData();
+    const title = cache.tabs.Schedule;
+    const sheet = title ? cache.metadata.find((m) => m.properties.title === title) : null;
+    if (!sheet) return { ok: false, reason: 'no-schedule' };
+    const grid = cache.raw.Schedule;
+    const width = Math.max(1, ...grid.map((r) => r.length));
+    const requests = (cache.namedRanges || []).filter((n) => /^Day_/.test(n.name)).map((n) => ({ deleteNamedRange: { namedRangeId: n.namedRangeId } }));
+    dayRanges(grid).slice(-MAX_JUMP_DAYS).forEach((d) => requests.push({
+      addNamedRange: { namedRange: { name: dayName(d.day), range: { sheetId: sheet.properties.sheetId, startRowIndex: d.startRow - 1, endRowIndex: d.endRow, startColumnIndex: 0, endColumnIndex: width } } },
+    }));
+    if (requests.length) await this.batchUpdate(requests);
+    this.clearCache();
+    return { ok: true };
+  }
+
   async scheduleDayUrl(day) {
     this.clearCache();
     const cache = await this.fetchAllData();
@@ -1086,8 +1106,7 @@ export class GSheetsService {
           fields: 'userEnteredValue',
         },
       });
-      const gp = schedule.properties.gridProperties || {};
-      requests.push(...buildLiveCheckRules(sheetId, plan, { rowCount: gp.rowCount, columnCount: gp.columnCount }));
+      requests.push(...buildLiveCheckRules(sheetId, plan));
     } else if (helper) {
       requests.push({ repeatCell: { range: { sheetId: helperId }, cell: {}, fields: 'userEnteredValue' } });
     }

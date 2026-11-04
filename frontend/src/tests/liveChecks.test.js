@@ -4,7 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { HyperFormula } from 'hyperformula';
-import { planLiveChecks, buildLiveCheckCells, buildLiveCheckRules, isLiveCheckRule, CHECK_TAB, FIRST_ROW, estimateSize } from '../services/liveChecks';
+import { planLiveChecks, buildLiveCheckCells, buildLiveCheckRules, isLiveCheckRule, CHECK_TAB, FIRST_ROW, estimateSize, FORMULA_BUDGET, MAX_ROWS } from '../services/liveChecks';
 import { validateAssignments } from '../lib/scheduleValidation';
 import { colLetter } from '../lib/sheetModel';
 
@@ -306,5 +306,43 @@ describe('conditional-format rules for the Schedule tab', () => {
     expect(isLiveCheckRule({ booleanRule: { condition: { values: [{ userEnteredValue: '=A1>1' }] } } })).toBe(false);
     // red is added last at index 0 so it ranks above amber
     expect(rules[1].addConditionalFormatRule.rule.booleanRule.format.backgroundColor.red).toBeCloseTo(0.96);
+  });
+});
+
+describe('speed budget', () => {
+  const wide = (cols, rows) => {
+    const posts = Array.from({ length: cols / 2 }, (_, i) => ({ name: `P${i}`, roles: 2 }));
+    return makeGrid(posts, [], rows).grid;
+  };
+  const model = (cols) => Array.from({ length: cols / 2 }, (_, i) => post(`P${i}`, 8, 4));
+  const formulas = (cells) => cells.flat().filter((v) => String(v).startsWith('=')).length;
+
+  it('never writes more helper formulas than the budget, however wide or long the schedule is', () => {
+    for (const [cols, rows] of [[4, 100], [12, 336], [24, 2000], [60, 3000]]) {
+      const grid = wide(cols, rows);
+      const plan = planLiveChecks(grid, model(cols));
+      expect(formulas(buildLiveCheckCells(plan, 'Schedule'))).toBeLessThanOrEqual(FORMULA_BUDGET + 3 * cols);
+    }
+  });
+
+  it('wide schedules check fewer of the most recent rows, small ones keep the full window', () => {
+    expect(planLiveChecks(wide(4, 600), model(4)).lastRow - planLiveChecks(wide(4, 600), model(4)).firstRow + 1).toBe(MAX_ROWS);
+    const w = planLiveChecks(wide(24, 600), model(24));
+    expect(w.lastRow - w.firstRow + 1).toBeLessThan(MAX_ROWS);
+    expect(w.lastRow - w.firstRow + 1).toBeGreaterThanOrEqual(24);
+  });
+
+  it('colours only the checked block, once per rule (INDIRECT is recalculated on every change)', () => {
+    const grid = wide(6, 500);
+    const plan = planLiveChecks(grid, model(6));
+    const rules = buildLiveCheckRules(7, plan);
+    for (const r of rules) {
+      const range = r.addConditionalFormatRule.rule.ranges[0];
+      expect(range.endRowIndex).toBe(plan.lastRow);
+      expect(range.startRowIndex).toBe(plan.firstRow - 1);
+      expect(range.endColumnIndex).toBe(Math.max(...plan.columns.map((c) => c.index)) + 1);
+      const f = r.addConditionalFormatRule.rule.booleanRule.condition.values[0].userEnteredValue;
+      expect(f.match(/INDIRECT/g)).toHaveLength(1);
+    }
   });
 });

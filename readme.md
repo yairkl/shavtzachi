@@ -41,9 +41,9 @@ Cooldown means the rest needed after finishing a shift of a post: the gap before
 
 ### Day View
 
-After a schedule is saved the spreadsheet gets a **Day View** tab: pick a day in the dropdown in cell B1 and the table shows just that day, instantly, with formulas (no app needed). Shifts are repeated on every row they cover, so a night shift that started the evening before still shows at the top of the next day. In the app, **Scheduler -> Day in Sheets** builds the tab if needed and opens it on the day you are looking at. The tab is rebuilt on every save and by *Check schedule* (it keeps your selected day); if you change a post's shift length by hand, press *Check schedule*. Days are identified as `yyyy-mm-dd` so the dropdown means the same day in every spreadsheet locale.
+After a schedule is saved the spreadsheet gets a **Day View** tab: pick a day in the dropdown in cell B1 and the table shows just that day, instantly, with formulas (no app needed). Shifts are repeated on every row they cover, so a night shift that started the evening before still shows at the top of the next day. In the app, **Scheduler -> Day in Sheets** builds the tab if needed and opens it on the day you are looking at. The tab is built the first time you press *Day in Sheets* (or *Update whole spreadsheet*); after that every save and *Check schedule* keep it up to date (it keeps your selected day). It is not built by a plain save, because it is thousands of formulas; if you change a post's shift length by hand, press *Check schedule*. Days are identified as `yyyy-mm-dd` so the dropdown means the same day in every spreadsheet locale.
 
-**Getting around a long schedule (100 days and more):** the Schedule tab's frozen corner cell is a link, *Date ▸ jump to a day*, that takes you to a clickable list of every day in the Day View; one click lands on the first row of that day in the Schedule tab. The Day View also has an *Open <day> in the Schedule tab* link next to the dropdown. Every day also gets a Name Box shortcut (`Day_2025_03_10`): type it in the box left of the formula bar, or pick it from the dropdown there, to select that day's rows. In the app, **Scheduler -> Edit in Sheets** opens the Schedule tab at the day on screen. The links and shortcuts are rebuilt on every save and by *Check schedule*.
+**Getting around a long schedule (100 days and more):** the Schedule tab's frozen corner cell is a link, *Date ▸ jump to a day*, that takes you to a clickable list of every day in the Day View; one click lands on the first row of that day in the Schedule tab. The Day View also has an *Open <day> in the Schedule tab* link next to the dropdown. Every day also gets a Name Box shortcut (`Day_2025_03_10`): type it in the box left of the formula bar, or pick it from the dropdown there, to select that day's rows. In the app, **Scheduler -> Edit in Sheets** opens the Schedule tab at the day on screen. The Name Box shortcuts are rebuilt on every save (they cost nothing); the clickable day list and the corner link come with the Day View, once it has been built.
 
 ### Assigning by hand
 
@@ -82,6 +82,15 @@ Notes: the workflow does not run on pull requests (forks cannot read secrets, an
 Pull requests run lint, the unit and contract tests, and the browser tests (`.github/workflows/ci.yml`).
 
 Pushes to `master` run the tests, build the app and deploy it to GitHub Pages (`.github/workflows/deploy.yml`).
+
+## Speed
+
+Everything the spreadsheet calculates by itself (live double-booking colours, the Day View) is a formula, and a lot of formulas make a spreadsheet slow, especially in the phone app. So the app keeps them within a budget:
+
+- the live checks cover the most recent rows only, at most about 9,000 helper formulas (a schedule with 12 columns checks about 250 rows, 24 columns about 125; narrower ones up to 336); older days are covered by *Check schedule*, which uses no formulas at all;
+- the red/amber colours are applied to exactly the checked block, not the whole sheet;
+- the Day View is built only when you ask for it, and is limited to about 12,000 helper formulas;
+- if the spreadsheet still feels slow, delete the **Schedule Check** and **Day View** tabs: the Schedule tab and all data keep working, and *Check schedule* in the app still marks every problem with a note.
 
 ## Google sign-in
 

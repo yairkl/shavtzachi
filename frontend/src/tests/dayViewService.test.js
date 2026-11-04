@@ -45,9 +45,23 @@ function engine(fake) {
 }
 
 describe('Day View written by the app', () => {
-  it('is created on save with a day dropdown, frozen header, hidden helper rows and division colours', async () => {
+  it('a plain save does not build it (thousands of formulas nobody asked for), but keeps an existing one up to date', async () => {
+    const { service, fake } = await makeService(tabs());
+    await service.saveAssignments(at(10, 6), at(12, 6), [asg('Dan', 'Gate', 10, 6, 10, 10)]);
+    expect(fake.tab(DAY_TAB)).toBeFalsy();
+    await service.refreshDayView(); // what "Day in Sheets" does
+    expect(fake.tab(DAY_TAB)).toBeTruthy();
+    fake.tab(DAY_TAB).values[0][1] = '2025-03-10';
+    await service.saveAssignments(at(10, 6), at(12, 6), [asg('Dan', 'Gate', 10, 6, 10, 10), asg('Eli', 'Gate', 11, 6, 11, 10)]);
+    expect(fake.rows(DAY_TAB)[0][1]).toBe('2025-03-10');
+    expect(JSON.stringify(fake.rows(DAY_TAB))).toContain('Schedule');
+    expect(await service.refreshDayView({ onlyIfBuilt: true })).toMatchObject({ ok: true });
+  });
+
+  it('is created with a day dropdown, frozen header, hidden helper rows and division colours', async () => {
     const { service, fake } = await makeService(tabs());
     await service.saveAssignments(at(10, 6), at(12, 6), [asg('Dan', 'Fort', 10, 6, 11, 6), asg('Eli', 'Gate', 11, 6, 11, 10)]);
+    await service.refreshDayView();
     const sheet = fake.tab(DAY_TAB);
     expect(sheet).toBeTruthy();
     expect(fake.rows(DAY_TAB)[0][1]).toMatch(/^2025-03-1[012]$/); // a valid day is selected (the saved window covers 10th to 12th)
@@ -68,6 +82,7 @@ describe('Day View written by the app', () => {
       asg('Eli', 'Gate', 11, 8, 11, 12),
       asg('Avi', 'Fort', 11, 6, 12, 6),
     ]);
+    await service.refreshDayView();
     const e = engine(fake);
     // the app picks the coarsest row height that fits all shifts: 2h here
     e.pick('2025-03-10');
@@ -86,6 +101,7 @@ describe('Day View written by the app', () => {
   it('keeps the day you picked when the schedule is saved again', async () => {
     const { service, fake } = await makeService(tabs());
     await service.saveAssignments(at(10, 6), at(12, 6), [asg('Dan', 'Gate', 10, 6, 10, 10), asg('Eli', 'Gate', 11, 6, 11, 10)]);
+    await service.refreshDayView();
     fake.tab(DAY_TAB).values[0][1] = '2025-03-10'; // the user picks the 10th in the sheet
     await service.saveAssignments(at(10, 6), at(12, 6), [asg('Dan', 'Gate', 10, 6, 10, 10), asg('Eli', 'Gate', 11, 6, 11, 10), asg('Avi', 'Tower', 11, 14, 11, 22)]);
     expect(fake.rows(DAY_TAB)[0][1]).toBe('2025-03-10');
@@ -93,6 +109,8 @@ describe('Day View written by the app', () => {
 
   it('every refresh replaces the tab (no duplicate sheets, rules or validations)', async () => {
     const { service, fake } = await makeService(tabs());
+    await service.saveAssignments(at(10, 6), at(12, 6), [asg('Dan', 'Gate', 10, 6, 10, 10)]);
+    await service.refreshDayView();
     for (let i = 0; i < 3; i++) await service.saveAssignments(at(10, 6), at(12, 6), [asg('Dan', 'Gate', 10, 6, 10, 10)]);
     expect(fake.sheets.filter((s) => s.properties.title === DAY_TAB)).toHaveLength(1);
     expect(fake.tab(DAY_TAB).conditionalFormats).toHaveLength(10);
