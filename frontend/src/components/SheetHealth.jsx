@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertCircle, AlertTriangle, CheckCircle2, ClipboardCopy, Info, Loader2, RefreshCw, Wrench, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, ClipboardCopy, Info, ListChecks, Loader2, Paintbrush, Sparkles, RefreshCw, Wrench, X } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { gsheetsService } from '@/services/gsheetsService';
 import { summarizeIssues } from '@/lib/sheetModel';
 import { describeError } from '@/lib/errors';
-import { notify } from '@/lib/notify';
+import { notify, useConfirm } from '@/lib/notify';
 
 const LEVEL = {
   error: { Icon: AlertCircle, cls: 'text-red-400' },
@@ -64,6 +64,8 @@ export function SheetHealthCard({ compact = false }) {
   const [health, setHealth] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const confirm = useConfirm();
+  const [scheduleCheck, setScheduleCheck] = useState(null);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -94,6 +96,41 @@ export function SheetHealthCard({ compact = false }) {
     }
   };
 
+  const updateAll = async () => {
+    const ok = await confirm({
+      title: 'Update the whole spreadsheet?',
+      description: 'Adds any missing tabs and columns, formats the Soldiers, Posts and Unavailabilities tabs for editing, and rebuilds the Schedule tab with division colours, the soldier dropdown, live double-booking checks, the Day View and jump links. All your data and every saved assignment are kept exactly as they are. Formatting rules you added yourself are kept; the app refreshes only its own.',
+      confirmText: 'Update',
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const res = await gsheetsService.applyAllFormatting();
+      notify.success(res.violations ? `Updated. ${res.violations} schedule problem(s) were marked in red.` : 'Spreadsheet updated.');
+      await load();
+    } catch (e) {
+      console.error(e);
+      notify.error(describeError(e, 'Could not update the spreadsheet. Nothing was lost; you can try again.'));
+      setBusy(false);
+    }
+  };
+
+  const checkSchedule = async () => {
+    setBusy(true);
+    try {
+      const res = await gsheetsService.checkSchedule({ mark: true });
+      setScheduleCheck(res);
+      if (!res.total) notify.info('There is no saved schedule to check yet.');
+      else if (!res.violations.length) notify.success(`Checked ${res.total} assignments: no problems.`);
+      else notify.info(`${res.violations.length} problem(s) found and marked in the Schedule tab (red text with a note).`);
+    } catch (e) {
+      console.error(e);
+      notify.error(describeError(e, 'Could not check the schedule.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const copyReport = async () => {
     setBusy(true);
     try {
@@ -107,6 +144,26 @@ export function SheetHealthCard({ compact = false }) {
     } catch (e) {
       notify.error(describeError(e, 'Could not build the report.'));
     } finally {
+      setBusy(false);
+    }
+  };
+
+  const format = async () => {
+    const ok = await confirm({
+      title: 'Format sheets for editing?',
+      description: 'Adds a styled header, notes, dropdowns, input checks, ISO date/24h time formats and red/amber highlighting of cells the app cannot read to the Soldiers, Posts and Unavailabilities tabs. Missing header columns are added; existing data is never changed. Highlight rules created by this app are refreshed; other formatting rules you added are kept.',
+      confirmText: 'Format',
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await gsheetsService.ensureSchema({ force: true });
+      const n = await gsheetsService.applyFormatting();
+      notify.success(`Formatted ${n} tab(s) for editing in Google Sheets.`);
+      await load();
+    } catch (e) {
+      console.error(e);
+      notify.error(describeError(e, 'Could not format the spreadsheet.'));
       setBusy(false);
     }
   };
@@ -156,12 +213,35 @@ export function SheetHealthCard({ compact = false }) {
               : <IssueList issues={health.issues} />}
           </>
         )}
+        {scheduleCheck && scheduleCheck.total > 0 && (
+          <div className="space-y-2 border-t border-border/50 pt-4">
+            <p className="text-sm font-semibold">
+              Schedule check: {scheduleCheck.total} assignment(s), {scheduleCheck.violations.length ? `${scheduleCheck.violations.length} problem(s)` : 'no problems'}
+            </p>
+            {scheduleCheck.violations.length === 0
+              ? <p className="text-sm text-green-400 flex items-center gap-2"><CheckCircle2 className="w-4 h-4" /> Nobody is double-booked, within cooldown, unqualified or unavailable.</p>
+              : <IssueList limit={40} issues={[...new Map(scheduleCheck.violations.map((v) => [`${v.post_name}|${v.start}|${v.message}`, {
+                  level: v.type === 'unknown' ? 'warning' : 'error',
+                  sheet: 'Schedule',
+                  message: `${v.post_name} ${new Date(v.start).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}: ${v.message}`,
+                }])).values()]} />}
+          </div>
+        )}
         <div className="flex flex-wrap gap-2 pt-2">
           <Button variant="outline" size="sm" className="gap-2" onClick={load} disabled={busy}>
             <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} /> Check again
           </Button>
           <Button variant="outline" size="sm" className="gap-2" onClick={repair} disabled={busy} title="Creates missing tabs and header columns. Never changes existing data.">
             <Wrench className="w-4 h-4" /> Repair sheet structure
+          </Button>
+          <Button size="sm" className="gap-2" onClick={updateAll} disabled={busy} title="One click: formats every tab, rebuilds the Schedule tab's colours, dropdown and live checks, and builds the Day View. Nothing you entered is changed.">
+            <Sparkles className="w-4 h-4" /> Update whole spreadsheet
+          </Button>
+          <Button variant="outline" size="sm" className="gap-2" onClick={format} disabled={busy} title="Dropdowns, validation, formats and highlighting for editing the sheet by hand. Never changes cell contents.">
+            <Paintbrush className="w-4 h-4" /> Format sheets for editing
+          </Button>
+          <Button variant="outline" size="sm" className="gap-2" onClick={checkSchedule} disabled={busy} title="Checks every saved assignment (including ones you edited by hand) for double booking, cooldown, missing skills, exclusions and unavailability, and marks problems in the Schedule tab.">
+            <ListChecks className="w-4 h-4" /> Check schedule
           </Button>
           <Button variant="outline" size="sm" className="gap-2" onClick={copyReport} disabled={busy} title="Copies what the app found in your spreadsheet (no people's names) so problems can be diagnosed.">
             <ClipboardCopy className="w-4 h-4" /> Copy diagnostic report

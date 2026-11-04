@@ -14,16 +14,20 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import axios from 'axios';
 import { GSheetsService } from '../../services/gsheetsService';
+import { HyperFormula } from 'hyperformula';
 import { makeService } from '../helpers/fakeSheets';
+import { CHECK_TAB } from '../../services/liveChecks';
+import { DAY_TAB } from '../../services/dayView';
 import { generateShifts, solveShiftAssignmentGreedy } from '../../lib/schedulerCore';
 
 const TOKEN = process.env.GOOGLE_ACCESS_TOKEN;
+const REUSE_ID = process.env.GOOGLE_TEST_SPREADSHEET_ID;
 const MODE = TOKEN ? 'live' : (process.env.LIVE_DRYRUN ? 'fake' : null);
 
 const DAY = ['2025-03-10T06:00:00', '2025-03-11T06:00:00'];
 
 describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
-  let service; let id;
+  let service; let id; let fake;
 
   const put = (range, values) => service.client.put(`/${id}/values/${range}?valueInputOption=USER_ENTERED`, { values });
 
@@ -32,10 +36,40 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
       service = new GSheetsService();
       service.setAccessToken(TOKEN);
     } else {
-      ({ service } = await makeService({}));
+      ({ service, fake } = await makeService({}));
     }
     service.CACHE_TTL = 0;
-    id = await service.createSpreadsheet(`Shavtzachi live test ${new Date().toISOString()}`);
+    if (MODE === 'live' && REUSE_ID) {
+      // A service account often may not create files, so CI points at a spreadsheet you own and shared with it (Editor).
+      // Start every run from the same state: four empty tabs.
+      id = REUSE_ID;
+      const base = `https://sheets.googleapis.com/v4/spreadsheets/${id}`;
+      const headers = { Authorization: `Bearer ${TOKEN}` };
+      try {
+        const { data } = await axios.get(`${base}?fields=sheets.properties.sheetId`, { headers });
+        const fresh = (title, extra = {}) => ({ addSheet: { properties: { title, ...extra } } });
+        await axios.post(`${base}:batchUpdate`, { requests: [
+          fresh('live-test-keep'),
+          ...data.sheets.map((sh) => ({ deleteSheet: { sheetId: sh.properties.sheetId } })),
+          fresh('Soldiers'), fresh('Posts'), fresh('Unavailabilities'),
+          fresh('Schedule', { gridProperties: { frozenRowCount: 2, frozenColumnCount: 2 } }),
+        ] }, { headers });
+        const kept = (await axios.get(`${base}?fields=sheets.properties(sheetId,title)`, { headers })).data.sheets.find((sh) => sh.properties.title === 'live-test-keep');
+        await axios.post(`${base}:batchUpdate`, { requests: [{ deleteSheet: { sheetId: kept.properties.sheetId } }] }, { headers });
+      } catch (e) {
+        throw new Error(`Could not reset the shared test spreadsheet (HTTP ${e.response?.status}): ${e.response?.data ? JSON.stringify(e.response.data) : e.message}. Is it shared with the service account as Editor?`);
+      }
+      service.setSpreadsheetId(id);
+      await service.ensureSchema({ force: true });
+    } else {
+      try {
+        id = await service.createSpreadsheet(`Shavtzachi live test ${new Date().toISOString()}`);
+      } catch (e) {
+        // show Google's own explanation (API not enabled, no permission...), not just the status code
+        const body = e.response?.data;
+        throw new Error(`Could not create the test spreadsheet (HTTP ${e.response?.status}): ${body ? JSON.stringify(body) : e.message}. A service account often cannot create files: set GOOGLE_TEST_SPREADSHEET_ID to a spreadsheet shared with it.`);
+      }
+    }
     // Type values exactly as a person would: Google parses them (TRUE -> checkbox-like boolean, 6:00 -> time, dates -> date cells).
     await put("'Soldiers'!A2", [['Dan', '1', 'guard', ''], ['Eli', '2', 'Guard, medic', ''], ['Avi', '1', 'guard', ''], ['Ben', '2', 'guard', ''], ['Gil', '1', 'medic', '']]);
     await put("'Posts'!A2", [
@@ -47,7 +81,7 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
   }, 60000);
 
   afterAll(async () => {
-    if (MODE !== 'live' || !id) return;
+    if (MODE !== 'live' || !id || REUSE_ID) return; // a shared spreadsheet is kept (it is reset at the start of the next run)
     try {
       await axios.delete(`https://www.googleapis.com/drive/v3/files/${id}`, { headers: { Authorization: `Bearer ${TOKEN}` } });
     } catch {
@@ -78,6 +112,22 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
     const health = await service.getHealth();
     expect(health.issues.filter((i) => i.level === 'error')).toEqual([]);
   }, 60000);
+
+
+  /** The FLAGS layer of the helper tab as the spreadsheet computes it (Google for real, a formula engine in dry-run). */
+  const computedFlags = async () => {
+    service.clearCache();
+    let rows;
+    if (MODE === 'live') {
+      rows = await service.fetchSheetValues(`'${CHECK_TAB}'!A1:Z600`);
+    } else {
+      const hf = HyperFormula.buildFromSheets({ Schedule: fake.rows('Schedule'), [CHECK_TAB]: fake.rows(CHECK_TAB) }, { licenseKey: 'gpl-v3' });
+      rows = hf.getSheetValues(hf.getSheetId(CHECK_TAB)).map((r) => r.map((v) => (v === null || v === undefined ? '' : String(v))));
+    }
+    const label = rows.findIndex((r) => r[0] === 'Problems (D, C)');
+    expect(label).toBeGreaterThan(0);
+    return rows.slice(label).flatMap((r) => r.slice(2)).filter((v) => v === 'D' || v === 'C');
+  };
 
   const draft = async (win = DAY) => {
     const soldiers = await service.getSoldiers();
@@ -135,6 +185,156 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
     expect((await service.getHealth()).missingTabs).toEqual([]);
     expect((await service.getSoldiers()).map((s) => s.name)).toContain('Dan');
   }, 60000);
+
+  it('accepts the formatting/validation rules and shows typed dates and times unambiguously', async () => {
+    await service.applyFormatting(); // Google validates every formula and rule on write
+    await service.applyFormatting(); // idempotent: replaces its own rules
+    const { metadata } = await service.fetchAllData();
+    const rules = (title) => metadata.find((m) => m.properties.title === title).conditionalFormats || [];
+    const n = rules('Posts').length;
+    expect(n).toBeGreaterThan(0);
+    await service.applyFormatting();
+    service.clearCache();
+    expect((await service.fetchAllData()).metadata.find((m) => m.properties.title === 'Posts').conditionalFormats).toHaveLength(n);
+
+    // Type like a person: with the ISO / 24h formats applied, Google hands the values back unambiguously.
+    const un = (await service.fetchAllData()).raw.Unavailabilities.length;
+    await put(`'Unavailabilities'!A${un + 1}`, [['Dan', '2025-03-12 09:30', '2025-03-12 17:00', 'typed after formatting']]);
+    await put("'Posts'!A100", [['Typed', '6', '6:00 PM', '6:00 AM', '', '', 'guard', 'TRUE', '', '']]);
+    service.clearCache();
+    const { raw } = await service.fetchAllData();
+    console.log('Typed unavailability as Google returns it:', JSON.stringify(raw.Unavailabilities[raw.Unavailabilities.length - 1]));
+    const added = (await service.getUnavailabilities()).find((u) => u.reason === 'typed after formatting');
+    expect(added).toMatchObject({ start_datetime: '2025-03-12T09:30:00', end_datetime: '2025-03-12T17:00:00' });
+    const typed = (await service.getPosts()).find((p) => p.name === 'Typed');
+    expect(typed).toMatchObject({ start_time: '18:00', end_time: '06:00', is_active: true });
+    expect((await service.getHealth()).issues.some((i) => /not set up for editing/.test(i.message))).toBe(false);
+  }, 120000);
+
+  it('accepts the schedule rule marks and colour rules, and flags a double booking', async () => {
+    const day = ['2025-03-25T06:00:00', '2025-03-26T06:00:00'];
+    const clash = (role) => ({ soldier_name: 'Dan', post_name: 'Gate', role_id: role, start: '2025-03-25T06:00:00', end: '2025-03-25T14:00:00' });
+    const saved = await service.saveAssignments(day[0], day[1], [clash(0), clash(1)]);
+    expect(saved.violations.some((v) => v.type === 'overlap')).toBe(true);
+    expect(saved.liveChecks.ok).toBe(true);
+    // the formulas are evaluated by the spreadsheet: both clashing cells are flagged
+    expect((await computedFlags()).filter((f) => f === 'D').length).toBeGreaterThanOrEqual(2);
+    const { metadata } = await service.fetchAllData();
+    const schedule = metadata.find((m) => m.properties.title === 'Schedule');
+    expect(schedule.conditionalFormats.length).toBeGreaterThanOrEqual(11); // 10 division colours + double-booking rule
+    const checked = await service.checkSchedule();
+    expect(checked.violations.length).toBeGreaterThan(0);
+    // a clean save removes the marks again
+    await service.saveAssignments(day[0], day[1], []);
+    expect((await service.checkSchedule()).violations.filter((v) => v.start && new Date(v.start) >= new Date(day[0]) && new Date(v.start) < new Date(day[1]))).toEqual([]);
+  }, 120000);
+
+  it('flags a double booking between shifts of different durations (12h Clinic vs 8h Gate starting on other rows)', async () => {
+    const day = ['2025-03-27T00:00:00', '2025-03-28T00:00:00'];
+    await service.saveAssignments(day[0], day[1], [
+      { soldier_name: 'Gil', post_name: 'Clinic', role_id: 0, start: '2025-03-27T00:00:00', end: '2025-03-27T12:00:00' },
+      { soldier_name: 'Gil', post_name: 'Gate', role_id: 0, start: '2025-03-27T06:00:00', end: '2025-03-27T14:00:00' },
+      { soldier_name: 'Dan', post_name: 'Gate', role_id: 1, start: '2025-03-27T06:00:00', end: '2025-03-27T14:00:00' },
+    ]);
+    const flags = await computedFlags();
+    expect(flags.filter((f) => f === 'D')).toHaveLength(2); // Gil on both, Dan fine
+    await service.saveAssignments(day[0], day[1], []);
+  }, 120000);
+
+  it('Day View: the spreadsheet computes the chosen day, with a night shift carried over midnight', async () => {
+    await service.saveAssignments('2025-03-29T00:00:00', '2025-03-31T00:00:00', [
+      { soldier_name: 'Gil', post_name: 'Clinic', role_id: 0, start: '2025-03-29T22:00:00', end: '2025-03-30T10:00:00' },
+      { soldier_name: 'Dan', post_name: 'Gate', role_id: 0, start: '2025-03-30T06:00:00', end: '2025-03-30T14:00:00' },
+    ]);
+    const res = await service.openDayView('2025-03-30');
+    expect(res.selected).toBe('2025-03-30');
+    service.clearCache();
+    let rows;
+    if (MODE === 'live') {
+      rows = await service.fetchSheetValues(`'${DAY_TAB}'!A1:H40`);
+    } else {
+      const hf = HyperFormula.buildFromSheets({ Schedule: fake.rows('Schedule'), [DAY_TAB]: fake.rows(DAY_TAB) }, { licenseKey: 'gpl-v3' });
+      rows = hf.getSheetValues(hf.getSheetId(DAY_TAB)).map((r) => r.map((v) => (v === null || v === undefined ? '' : String(v))));
+    }
+    const shown = rows.slice(4).filter((r) => r[1]);
+    const text = JSON.stringify(shown);
+    expect(text).toContain('Gil'); // the Clinic night shift started the evening before and is still on duty after midnight
+    expect(text).toContain('Dan');
+    expect(shown.every((r) => !r[0] || r[0].includes('2025-03-30'))).toBe(true);
+    // jumping: Name Box shortcuts exist for the days, and (on real Google) the day list shows clickable day names
+    service.clearCache();
+    const named = (await service.fetchAllData()).namedRanges.map((n) => n.name);
+    expect(named).toEqual(expect.arrayContaining(['Day_2025_03_29', 'Day_2025_03_30']));
+    if (MODE === 'live') {
+      const grid = await service.fetchSheetValues(`'${DAY_TAB}'!A3:Z40`);
+      const column = grid.map((r) => r.find((v) => /^2025-03-\d\d$/.test(v)));
+      expect(column.filter(Boolean)).toEqual(expect.arrayContaining(['2025-03-29', '2025-03-30']));
+      const corner = await service.fetchSheetValues("'Schedule'!A1:A1");
+      expect(corner[0][0]).toContain('jump to a day');
+    }
+    await service.saveAssignments('2025-03-29T00:00:00', '2025-03-31T00:00:00', []);
+  }, 120000);
+
+  it('the assignment dropdown is accepted by Google and read back as a soldier list', async () => {
+    const day = ['2025-03-24T06:00:00', '2025-03-25T06:00:00'];
+    await service.saveAssignments(day[0], day[1], [{ soldier_name: 'Dan', post_name: 'Gate', role_id: 0, start: '2025-03-24T06:00:00', end: '2025-03-24T14:00:00' }]);
+    service.clearCache();
+    const rule = await service._scheduleValidation('Schedule'); // read back from the sheet itself
+    expect(rule).toBeTruthy();
+    expect(rule.condition.type).toBe('ONE_OF_RANGE');
+    expect(rule.condition.values[0].userEnteredValue.replace(/'/g, '')).toMatch(/Soldiers!\$A\$2:\$A/);
+    expect(rule.strict).toBeFalsy(); // typing another name is still allowed
+    // saving again keeps it
+    await service.saveAssignments(day[0], day[1], [{ soldier_name: 'Dan', post_name: 'Gate', role_id: 0, start: '2025-03-24T06:00:00', end: '2025-03-24T14:00:00' }]);
+    expect((await service._scheduleValidation('Schedule')).condition.type).toBe('ONE_OF_RANGE');
+    await service.saveAssignments(day[0], day[1], []);
+  }, 120000);
+
+  it('Update whole spreadsheet changes no data and is stable when repeated (Google accepts every request)', async () => {
+    const day = ['2025-04-02T06:00:00', '2025-04-03T06:00:00'];
+    await service.saveAssignments(day[0], day[1], [{ soldier_name: 'Dan', post_name: 'Gate', role_id: 0, start: '2025-04-02T06:00:00', end: '2025-04-02T14:00:00' }]);
+    const key = (a) => `${a.post_name}|${a.role_id}|${a.soldier_name}|${a.start.getTime()}|${a.end.getTime()}`;
+    service.clearCache();
+    const before = (await service.getAssignmentsInRange('2000-01-01T00:00:00', '2100-01-01T00:00:00')).map(key).sort();
+    const soldiersBefore = JSON.stringify((await service.fetchAllData()).raw.Soldiers.slice(1));
+    await service.applyAllFormatting();
+    await service.applyAllFormatting();
+    service.clearCache();
+    expect((await service.getAssignmentsInRange('2000-01-01T00:00:00', '2100-01-01T00:00:00')).map(key).sort()).toEqual(before);
+    expect(JSON.stringify((await service.fetchAllData()).raw.Soldiers.slice(1))).toBe(soldiersBefore);
+    await service.saveAssignments(day[0], day[1], []);
+  }, 240000);
+
+  it('every slot is a merged block with its own dropdown (everyone, best fit first) and a note, as Google stores them', async () => {
+    const day = ['2025-04-07T06:00:00', '2025-04-08T06:00:00'];
+    await service.saveAssignments(day[0], day[1], [{ soldier_name: 'Dan', post_name: 'Gate', role_id: 0, start: '2025-04-07T06:00:00', end: '2025-04-07T14:00:00' }]);
+    const res = await service.refreshAssignmentLists();
+    expect(res.ok).toBe(true);
+    expect(res.blocks).toBeGreaterThan(1);
+    expect(res.empty).toBeGreaterThan(0);
+    if (MODE === 'live') {
+      service.clearCache();
+      const { metadata, raw } = await service.fetchAllData();
+      const schedule = metadata.find((m) => m.properties.title === 'Schedule');
+      const header = raw.Schedule[0];
+      // an empty slot: take the second column's first merged block that has no name
+      const merges = (schedule.merges || []).filter((m) => m.startColumnIndex >= 2 && m.endRowIndex - m.startRowIndex > 1);
+      expect(merges.length).toBeGreaterThan(1); // empty slots are merged to their shift length too
+      const empty = merges.find((m) => !String(raw.Schedule[m.startRowIndex]?.[m.startColumnIndex] ?? '').trim());
+      expect(empty, `a merged empty slot in ${JSON.stringify(header)}`).toBeTruthy();
+      const params = new URLSearchParams({
+        ranges: `'Schedule'!${String.fromCharCode(65 + empty.startColumnIndex)}${empty.startRowIndex + 1}`,
+        fields: 'sheets(data(rowData(values(dataValidation,note))))',
+      });
+      const cell = (await service.client.get(`/${service.spreadsheetId}?${params.toString()}`)).data.sheets[0].data[0].rowData[0].values[0];
+      expect(cell.dataValidation.condition.type).toBe('ONE_OF_LIST');
+      const names = cell.dataValidation.condition.values.map((v) => v.userEnteredValue);
+      const everyone = (await service.getSoldiers()).map((x) => x.name);
+      expect(new Set(names)).toEqual(new Set(everyone)); // everyone is offered
+      expect(cell.note).toMatch(/Best fits|Nobody fits/);
+    }
+    await service.saveAssignments(day[0], day[1], []);
+  }, 180000);
 
   it('grows the grid for a schedule wider than the default 26 columns', async () => {
     const wide = Array.from({ length: 30 }, (_, i) => [`W${i + 1}`, '12', '0:00', '0:00', '0', '1', 'guard', 'TRUE', '', '']);

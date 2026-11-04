@@ -1,0 +1,61 @@
+name: Live Google test
+
+# Runs the smoke test against the REAL Google Sheets API (frontend/src/tests/live/googleLive.test.js).
+# It authenticates as a service account: a fresh, short-lived access token is created on every run, so there is
+# nothing permanent to rotate and no personal Google account involved. The test creates its own throw-away
+# spreadsheet in the service account's Drive and deletes it afterwards.
+#
+# Not run on pull requests: forks cannot read secrets, and the test writes to a real Google account.
+# See "Running the live test in CI" in the readme for the one-time setup.
+
+on:
+  workflow_dispatch:
+  # TEMPORARY: lets a push to this branch start the run while the workflow is not on the default branch yet
+  push:
+    branches: [ccr-7b12bb5c-y1tz0t-sheet-validation]
+  schedule:
+    - cron: '17 4 * * 1' # Mondays 04:17 UTC, only when the repository variable GOOGLE_LIVE_TESTS is 'true'
+
+permissions:
+  contents: read
+
+concurrency: live-google-test
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    # Manual runs always go; scheduled runs only after the secret has been set up and the variable enabled.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || vars.GOOGLE_LIVE_TESTS == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm install
+
+      # Signs a token request with the service-account key (scripts/service-account-token.mjs): no extra Google APIs or
+      # IAM permissions are needed beyond the Sheets and Drive APIs.
+      - name: Get a short-lived Google access token
+        id: auth
+        working-directory: frontend
+        env:
+          GOOGLE_SA_KEY: ${{ secrets.GOOGLE_SA_KEY }}
+        run: |
+          TOKEN="$(node scripts/service-account-token.mjs)"
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Live test against Google Sheets
+        working-directory: frontend
+        env:
+          GOOGLE_ACCESS_TOKEN: ${{ steps.auth.outputs.token }}
+          # optional: a spreadsheet you own, shared with the service account as Editor (the test resets it every run).
+          # Needed when the service account may not create files itself.
+          GOOGLE_TEST_SPREADSHEET_ID: ${{ vars.GOOGLE_TEST_SPREADSHEET_ID }}
+        run: npm run test:live

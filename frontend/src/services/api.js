@@ -171,7 +171,7 @@ export const draftSchedule = async (startDate, endDate) => {
 };
 
 export const saveSchedule = (startDate, endDate, assignments) => {
-  return gsheetsService.saveAssignments(startDate, endDate, assignments).then(() => ({ data: { status: 'success' } }));
+  return gsheetsService.saveAssignments(startDate, endDate, assignments).then((res) => ({ data: { status: 'success', violations: res?.violations || [], liveChecks: res?.liveChecks || null } }));
 };
 
 export const exportSchedule = async (startDate, endDate) => {
@@ -275,3 +275,9 @@ export const getAuthStatus = async () => {
   }
   return { data: { authenticated: false, backend: 'gsheets', reason: 'no_token' } };
 };
+
+/** Build the Day View tab (a day picker inside the spreadsheet) and return its address, set to `day` ("yyyy-MM-dd"). */
+export const openDayView = (day) => gsheetsService.openDayView(day);
+
+/** Address of a day ("yyyy-MM-dd") inside the Schedule tab, for editing it there. */
+export const getScheduleDayUrl = (day) => gsheetsService.scheduleDayUrl(day);

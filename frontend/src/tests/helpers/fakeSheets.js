@@ -33,12 +33,14 @@ export class FakeSheets {
     this.sheets = [];
     this.calls = [];
     this.failNextBatch = null;
+    this.namedRanges = [];
+    this.nextNamedId = 1;
     Object.entries(tabs).forEach(([title, values]) => this._addSheet(title, values));
   }
 
-  _addSheet(title, values = [], grid = {}) {
+  _addSheet(title, values = [], grid = {}, sheetId) {
     const sheet = {
-      properties: { title, sheetId: this.nextSheetId++, gridProperties: { ...this.defaults, ...grid } },
+      properties: { title, sheetId: sheetId ?? this.nextSheetId++, gridProperties: { ...this.defaults, ...grid } },
       values: values.map((r) => [...r]),
       merges: [],
       conditionalFormats: [],
@@ -83,9 +85,15 @@ export class FakeSheets {
 
   async get(url) {
     this.calls.push(['GET', url]);
+    if (/\?ranges=/.test(url) && /dataValidation/.test(decodeURIComponent(url))) {
+      const q = new URLSearchParams(url.split('?')[1]);
+      const { sheet } = this._sheetFromRange(q.get('ranges'));
+      const hit = (sheet.validations || [])[0];
+      return { data: { sheets: [{ data: [{ rowData: hit ? [{ values: [{ dataValidation: hit.rule }] }] : [] }] }] } };
+    }
     let m = url.match(/^\/[^/?]+\?fields=/);
     if (m) {
-      return { data: { properties: { locale: this.locale }, sheets: this.sheets.map((s) => ({ properties: { ...s.properties, gridProperties: { ...s.properties.gridProperties } }, merges: [...s.merges], conditionalFormats: [...s.conditionalFormats] })) } };
+      return { data: { properties: { locale: this.locale }, namedRanges: this.namedRanges.map((n) => ({ ...n })), sheets: this.sheets.map((s) => ({ properties: { ...s.properties, gridProperties: { ...s.properties.gridProperties } }, merges: [...s.merges], conditionalFormats: [...s.conditionalFormats] })) } };
     }
     m = url.match(/^\/[^/?]+\/values:batchGet\?(.*)$/);
     if (m) {
@@ -139,6 +147,7 @@ export class FakeSheets {
   async _batch(requests) {
     if (this.failNextBatch) { const e = this.failNextBatch; this.failNextBatch = null; throw e; }
     const snapshot = JSON.stringify(this.sheets);
+    const namedSnapshot = JSON.stringify(this.namedRanges);
     const replies = [];
     try {
       for (const req of requests) {
@@ -148,33 +157,72 @@ export class FakeSheets {
         switch (kind) {
           case 'addSheet': {
             if (this.tab(arg.properties.title)) throw apiError(400, `A sheet with the name "${arg.properties.title}" already exists.`);
-            const s = this._addSheet(arg.properties.title, [], arg.properties.gridProperties || {});
+            const s = this._addSheet(arg.properties.title, [], arg.properties.gridProperties || {}, arg.properties.sheetId);
             replies.push({ addSheet: { properties: JSON.parse(JSON.stringify(s.properties)) } });
             continue;
           }
+          case 'addNamedRange': {
+            if (this.namedRanges.some((n) => n.name === arg.namedRange.name)) throw apiError(400, `A named range with the name "${arg.namedRange.name}" already exists.`);
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(arg.namedRange.name)) throw apiError(400, `Invalid named range name "${arg.namedRange.name}".`);
+            this.namedRanges.push({ namedRangeId: `nr${this.nextNamedId++}`, ...arg.namedRange });
+            replies.push({});
+            continue;
+          }
+          case 'deleteNamedRange': this.namedRanges = this.namedRanges.filter((n) => n.namedRangeId !== arg.namedRangeId); replies.push({}); continue;
           case 'deleteSheet': this.sheets = this.sheets.filter((x) => x.properties.sheetId !== arg.sheetId); break;
           case 'unmergeCells': sheet.merges = []; break;
-          case 'repeatCell': sheet.values = []; break;
+          case 'repeatCell':
+            // Only wipes content when asked to (fields include userEnteredValue); formatting-only calls keep the data.
+            if ((arg.fields || '').split(',').some((f) => f.trim() === 'userEnteredValue')) sheet.values = [];
+            else (sheet.formatting ||= []).push({ range: arg.range, fields: arg.fields, cell: arg.cell });
+            if ((arg.fields || '').split(',').some((f) => f.trim() === 'note') && sheet.notes) {
+              const { startRowIndex = 0, endRowIndex = Infinity, startColumnIndex = 0, endColumnIndex = Infinity } = arg.range;
+              for (const key of Object.keys(sheet.notes)) {
+                const [r, c] = key.split(',').map(Number);
+                if (r >= startRowIndex && r < endRowIndex && c >= startColumnIndex && c < endColumnIndex) delete sheet.notes[key];
+              }
+            }
+            break;
+          case 'updateDimensionProperties': (sheet.dimensions ||= []).push(arg); break;
+          case 'setDataValidation': (sheet.validations ||= []).push({ range: arg.range, rule: arg.rule }); break;
           case 'updateCells': {
             const { startRowIndex = 0, startColumnIndex = 0 } = arg.range;
             arg.rows.forEach((row, ri) => row.values.forEach((cell, ci) => {
-              const v = cell?.userEnteredValue?.stringValue;
+              const v = cell?.userEnteredValue?.stringValue ?? cell?.userEnteredValue?.formulaValue;
               if (v !== undefined) this._write(sheet, startRowIndex + ri, startColumnIndex + ci, v);
+              if (cell?.note !== undefined) {
+                const key = `${startRowIndex + ri},${startColumnIndex + ci}`;
+                if (cell.note === '') delete (sheet.notes ||= {})[key]; else (sheet.notes ||= {})[key] = cell.note;
+              }
             }));
             break;
           }
-          case 'mergeCells': sheet.merges.push({ ...arg.range }); break;
+          case 'mergeCells': {
+            sheet.merges.push({ ...arg.range });
+            // like Google Sheets: only the top-left value of a merged range survives
+            const { startRowIndex, endRowIndex, startColumnIndex, endColumnIndex } = arg.range;
+            for (let r = startRowIndex; r < endRowIndex; r++) {
+              for (let c = startColumnIndex; c < endColumnIndex; c++) {
+                if ((r !== startRowIndex || c !== startColumnIndex) && sheet.values[r]?.[c] !== undefined) sheet.values[r][c] = '';
+              }
+            }
+            break;
+          }
           case 'updateSheetProperties':
             Object.assign(sheet.properties.gridProperties, arg.properties.gridProperties);
             break;
-          case 'deleteConditionalFormatRule': sheet.conditionalFormats.shift(); break;
-          case 'addConditionalFormatRule': sheet.conditionalFormats.push(arg.rule); break;
+          case 'deleteConditionalFormatRule':
+            if (arg.index >= sheet.conditionalFormats.length) throw apiError(400, `Invalid index ${arg.index}`);
+            sheet.conditionalFormats.splice(arg.index, 1);
+            break;
+          case 'addConditionalFormatRule': sheet.conditionalFormats.splice(arg.index ?? 0, 0, arg.rule); break;
           default: throw apiError(400, `Unsupported request ${kind}`);
         }
         replies.push({});
       }
     } catch (e) {
       this.sheets = JSON.parse(snapshot); // batchUpdate is atomic
+      this.namedRanges = JSON.parse(namedSnapshot);
       throw e;
     }
     return { data: { replies } };

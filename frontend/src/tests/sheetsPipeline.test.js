@@ -322,7 +322,7 @@ describe('schedule round trip with irregular shift times (regression: shifts not
     const a = { post_name: 'P', role_id: 0, soldier_name: 'Dan', start: new Date(2025, 2, 10, 6), end: new Date(2025, 2, 10, 14) };
     const outside = { post_name: 'P', role_id: 0, soldier_name: 'Eli', start: new Date(2025, 2, 20, 6), end: new Date(2025, 2, 20, 14) };
     const reqs = buildScheduleRequests(1, [a, outside], new Date(2025, 2, 10, 6), new Date(2025, 2, 10, 14), 4);
-    expect(reqs.stats).toEqual({ written: 1, skipped: 1 });
+    expect(reqs.stats).toMatchObject({ written: 1, skipped: 1 });
   });
 
   it('reads sheets that were saved by the old fixed 4-hour layout', async () => {
