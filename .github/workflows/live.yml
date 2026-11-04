@@ -10,6 +10,9 @@ name: Live Google test
 
 on:
   workflow_dispatch:
+  # TEMPORARY: lets a push to this branch start the run while the workflow is not on the default branch yet
+  push:
+    branches: [ccr-7b12bb5c-y1tz0t-sheet-validation]
   schedule:
     - cron: '17 4 * * 1' # Mondays 04:17 UTC, only when the repository variable GOOGLE_LIVE_TESTS is 'true'
 
@@ -23,7 +26,7 @@ jobs:
   live:
     runs-on: ubuntu-latest
     # Manual runs always go; scheduled runs only after the secret has been set up and the variable enabled.
-    if: ${{ github.event_name == 'workflow_dispatch' || vars.GOOGLE_LIVE_TESTS == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || vars.GOOGLE_LIVE_TESTS == 'true' }}
     steps:
       - uses: actions/checkout@v4
 
