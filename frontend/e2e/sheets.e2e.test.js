@@ -272,3 +272,46 @@ test('"Edit in Sheets" opens the Schedule tab at the first row of the day on scr
   assert.deepEqual(s.problems, []);
   await s.context.close();
 });
+
+test('saving from the app gives the Schedule tab a soldier dropdown over the whole schedule', async () => {
+  const s = await app.open(messySheet());
+  await s.go('/scheduler');
+  await s.page.getByRole('button', { name: /Auto Assign/ }).click();
+  await s.toast(/Assigned all/);
+  await s.page.getByRole('button', { name: /Save/ }).first().click();
+  await s.toast(/Saved \d+ assignment/);
+  const rules = s.fake.tab('Schedule').validations || [];
+  assert.equal(rules.length, 1);
+  assert.equal(rules[0].rule.condition.type, 'ONE_OF_RANGE');
+  assert.match(rules[0].rule.condition.values[0].userEnteredValue, /^='Soldiers'!\$A\$2:\$A$/);
+  assert.ok(rules[0].range.endRowIndex >= s.fake.rows('Schedule').length, 'covers every row of the schedule');
+  assert.deepEqual(s.problems, []);
+  await s.context.close();
+});
+
+test('"Update whole spreadsheet" brings an old sheet up to date without changing its data', async () => {
+  const s = await app.open({
+    Soldiers: [HEAD.Soldiers, ['Dan', '1', 'guard', ''], ['Eli', '2', 'guard', '']],
+    Posts: [HEAD.Posts, ['Gate', '4', '06:00', '05:59', '8', '1', 'guard,guard', '1', '', '']],
+    Unavailabilities: [HEAD.Unavailabilities],
+    Schedule: [
+      ['Date', 'Time', 'Gate', ''],
+      ['', '', 'Role 1', 'Role 2'],
+      ['10/03/2025', '06:00 - 10:00', 'Dan', 'Eli'],
+      ['', '10:00 - 14:00', 'Eli', 'Dan'],
+    ],
+  });
+  await s.go('/settings');
+  await s.page.getByText(/Found 2 soldier/).waitFor();
+  const dataBefore = JSON.stringify(s.fake.rows('Soldiers').slice(1)) + JSON.stringify(s.fake.rows('Posts').slice(1));
+  await s.page.getByRole('button', { name: /Update whole spreadsheet/ }).click();
+  await s.page.getByRole('alertdialog').getByRole('button', { name: 'Update' }).click();
+  await s.toast(/Spreadsheet updated|schedule problem/);
+  assert.equal(JSON.stringify(s.fake.rows('Soldiers').slice(1)) + JSON.stringify(s.fake.rows('Posts').slice(1)), dataBefore, 'data rows untouched');
+  assert.ok(s.fake.tab('Day View'), 'Day View built');
+  assert.ok(s.fake.tab('Schedule').validations.length > 0, 'soldier dropdown on the schedule');
+  assert.ok(s.fake.tab('Soldiers').validations.length > 0, 'data tabs formatted');
+  assert.ok(s.fake.namedRanges.some((n) => n.name === 'Day_2025_03_10'), 'jump shortcuts');
+  assert.deepEqual(s.problems, []);
+  await s.context.close();
+});

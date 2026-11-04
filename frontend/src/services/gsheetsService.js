@@ -728,17 +728,20 @@ export class GSheetsService {
     const finalGrid = { rowCount: Math.max(needRows, grid.rowCount), columnCount: Math.max(needCols, grid.columnCount) };
     // colour rules only over the cells in use (see buildDivisionColoringRules)
     const used = { rowCount: cells ? cells.rows.length : 3, columnCount: needCols > 0 ? needCols - 1 : 3 };
-    const restoreValidation = validation
-      ? [{ setDataValidation: { range: { sheetId, startRowIndex: 2, endRowIndex: Math.max(used.rowCount, 3), startColumnIndex: 2, endColumnIndex: Math.max(used.columnCount, 3) }, rule: validation } }]
-      : [];
+    // The assignment dropdown: pick a soldier for any cell of the schedule. A dropdown someone set up by hand is kept
+    // as it is; otherwise one listing the Soldiers tab's names is added. It never blocks typing (strict: false).
     const { model, tabs: tabTitles } = await this.fetchAllData();
+    const rule = validation || this._assignmentDropdown(model, tabTitles);
+    const dropdown = rule
+      ? [{ setDataValidation: { range: { sheetId, startRowIndex: 2, endRowIndex: Math.max(used.rowCount, 3), startColumnIndex: 2, endColumnIndex: Math.max(used.columnCount, 3) }, rule } }]
+      : [];
     const { violations, marks } = this._checkPlacements(built.placements || [], model);
     await this.batchUpdate([
       ...resize,
       ...clearAll,
       ...rest,
       ...buildDivisionColoringRules(sheetId, this._soldiersRef(model, tabTitles), used),
-      ...restoreValidation,
+      ...dropdown,
       ...buildViolationMarkRequests(sheetId, marks, finalGrid),
     ]);
     this.clearCache();
@@ -873,6 +876,34 @@ export class GSheetsService {
       res = { ...res, missing: true };
     }
     return { url: `https://docs.google.com/spreadsheets/d/${this.spreadsheetId}/edit#gid=${res.sheetId}`, sheetId: res.sheetId, selected: res.selected, missing: !!res.missing };
+  }
+
+  /**
+   * Bring an existing spreadsheet fully up to date in one go: missing tabs/columns, formatting and validation of the data
+   * tabs, and the Schedule tab's colours, soldier dropdown, live checks, Day View, jump links and problem marks.
+   * No cell content is changed: the saved assignments are read and written back exactly as they are.
+   * Returns { steps: string[], assignments, violations }.
+   */
+  async applyAllFormatting() {
+    const steps = [];
+    steps.push(...await this.ensureSchema({ force: true }));
+    const formatted = await this.applyFormatting();
+    steps.push(`Formatted ${formatted} data tab(s) for editing`);
+
+    this.clearCache();
+    const cache = await this.fetchAllData();
+    const existing = cache.tabs.Schedule ? this._scheduleAssignments(cache) : [];
+    if (!existing.length) {
+      steps.push('No saved schedule yet: the Schedule tab will be set up the first time you save');
+      return { steps, assignments: 0, violations: 0 };
+    }
+    // A save whose window touches nothing keeps every assignment and rewrites the tab with all the current features.
+    await this.saveAssignments('1970-01-01T00:00:00', '1970-01-02T00:00:00', []);
+    steps.push(`Rebuilt the Schedule tab with colours and the soldier dropdown (${existing.length} assignments kept)`);
+    const check = await this.checkSchedule({ mark: true });
+    steps.push('Updated the live checks, the Day View and the jump links');
+    steps.push(check.violations.length ? `${check.violations.length} schedule problem(s) marked in red` : 'No schedule problems found');
+    return { steps, assignments: existing.length, violations: check.violations.length };
   }
 
   /**
@@ -1020,6 +1051,19 @@ export class GSheetsService {
       });      await this.refreshDayView().catch((e) => console.warn('Could not update the Day View', e));
     }
     return { total: assignments.length, violations, marked: marks.length, liveChecks: live };
+  }
+
+  /** A dropdown of the Soldiers tab's names (found by header, so reordered columns work), or null without a Soldiers tab. */
+  _assignmentDropdown(model, tabs) {
+    const col = model.columns.Soldiers?.name;
+    if (!tabs.Soldiers || col === undefined) return null;
+    const letter = colLetter(col);
+    return {
+      condition: { type: 'ONE_OF_RANGE', values: [{ userEnteredValue: `=${quoteTab(tabs.Soldiers)}!$${letter}$2:$${letter}` }] },
+      inputMessage: 'Pick a soldier',
+      strict: false,
+      showCustomUi: true,
+    };
   }
 
   /** The first data-validation rule (dropdown) found in the Schedule cells, or null. */

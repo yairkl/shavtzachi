@@ -45,6 +45,14 @@ After a schedule is saved the spreadsheet gets a **Day View** tab: pick a day in
 
 **Getting around a long schedule (100 days and more):** the Schedule tab's frozen corner cell is a link, *Date ▸ jump to a day*, that takes you to a clickable list of every day in the Day View; one click lands on the first row of that day in the Schedule tab. The Day View also has an *Open <day> in the Schedule tab* link next to the dropdown. Every day also gets a Name Box shortcut (`Day_2025_03_10`): type it in the box left of the formula bar, or pick it from the dropdown there, to select that day's rows. In the app, **Scheduler -> Edit in Sheets** opens the Schedule tab at the day on screen. The links and shortcuts are rebuilt on every save and by *Check schedule*.
 
+### Assigning by hand
+
+Every save puts a **soldier dropdown** (the names of the Soldiers tab) on all cells of the Schedule tab, empty slots included: click a cell, pick a name. It never blocks typing, and a dropdown you set up yourself is kept instead. A name picked into a single cell lasts for the shift length of its post (it stops before the next filled cell), so you do not need to merge cells by hand.
+
+### Updating an existing spreadsheet
+
+Open **Settings -> Spreadsheet health -> Update whole spreadsheet** (after a confirmation). In one step it adds any missing tabs and columns, formats the Soldiers, Posts and Unavailabilities tabs for editing, and rebuilds the Schedule tab with the division colours, the soldier dropdown, the live double-booking checks, the Day View and the jump links. It never changes your data: every row and every saved assignment is written back exactly as it was, your own dropdown / formatting rules / named ranges are kept, and it can be run as often as you like. The same things also happen automatically whenever you save a schedule.
+
 ### Tests
 
 - `npm test` - unit tests, including an in-memory fake of the Google Sheets API (`src/tests/helpers/fakeSheets.js`) used to test hand-edited and imported spreadsheets end to end.

@@ -244,6 +244,36 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
     await service.saveAssignments('2025-03-29T00:00:00', '2025-03-31T00:00:00', []);
   }, 120000);
 
+  it('the assignment dropdown is accepted by Google and read back as a soldier list', async () => {
+    const day = ['2025-03-24T06:00:00', '2025-03-25T06:00:00'];
+    await service.saveAssignments(day[0], day[1], [{ soldier_name: 'Dan', post_name: 'Gate', role_id: 0, start: '2025-03-24T06:00:00', end: '2025-03-24T14:00:00' }]);
+    service.clearCache();
+    const rule = await service._scheduleValidation('Schedule'); // read back from the sheet itself
+    expect(rule).toBeTruthy();
+    expect(rule.condition.type).toBe('ONE_OF_RANGE');
+    expect(rule.condition.values[0].userEnteredValue.replace(/'/g, '')).toMatch(/Soldiers!\$A\$2:\$A/);
+    expect(rule.strict).toBeFalsy(); // typing another name is still allowed
+    // saving again keeps it
+    await service.saveAssignments(day[0], day[1], [{ soldier_name: 'Dan', post_name: 'Gate', role_id: 0, start: '2025-03-24T06:00:00', end: '2025-03-24T14:00:00' }]);
+    expect((await service._scheduleValidation('Schedule')).condition.type).toBe('ONE_OF_RANGE');
+    await service.saveAssignments(day[0], day[1], []);
+  }, 120000);
+
+  it('Update whole spreadsheet changes no data and is stable when repeated (Google accepts every request)', async () => {
+    const day = ['2025-04-02T06:00:00', '2025-04-03T06:00:00'];
+    await service.saveAssignments(day[0], day[1], [{ soldier_name: 'Dan', post_name: 'Gate', role_id: 0, start: '2025-04-02T06:00:00', end: '2025-04-02T14:00:00' }]);
+    const key = (a) => `${a.post_name}|${a.role_id}|${a.soldier_name}|${a.start.getTime()}|${a.end.getTime()}`;
+    service.clearCache();
+    const before = (await service.getAssignmentsInRange('2000-01-01T00:00:00', '2100-01-01T00:00:00')).map(key).sort();
+    const soldiersBefore = JSON.stringify((await service.fetchAllData()).raw.Soldiers.slice(1));
+    await service.applyAllFormatting();
+    await service.applyAllFormatting();
+    service.clearCache();
+    expect((await service.getAssignmentsInRange('2000-01-01T00:00:00', '2100-01-01T00:00:00')).map(key).sort()).toEqual(before);
+    expect(JSON.stringify((await service.fetchAllData()).raw.Soldiers.slice(1))).toBe(soldiersBefore);
+    await service.saveAssignments(day[0], day[1], []);
+  }, 240000);
+
   it('grows the grid for a schedule wider than the default 26 columns', async () => {
     const wide = Array.from({ length: 30 }, (_, i) => [`W${i + 1}`, '12', '0:00', '0:00', '0', '1', 'guard', 'TRUE', '', '']);
     await service.appendRows("'Posts'!A:J", wide);
