@@ -272,6 +272,15 @@ export class GSheetsService {
     const sch = cache.raw.Schedule;
     lines.push('', `## Schedule tab: ${sch ? `${sch.length} rows` : 'absent'}`);
     if (sch) lines.push(`header rows: ${JSON.stringify(sch.slice(0, 2))}`);
+    const schedMeta = cache.tabs.Schedule && cache.metadata.find((m) => m.properties.title === cache.tabs.Schedule);
+    if (schedMeta) {
+      const gp = schedMeta.properties.gridProperties || {};
+      lines.push(`grid: ${gp.rowCount} rows x ${gp.columnCount} columns; merged ranges: ${(schedMeta.merges || []).length}`);
+      (schedMeta.conditionalFormats || []).forEach((r, i) => {
+        const rg = (r.ranges || []).map((x) => `rows ${x.startRowIndex + 1}-${x.endRowIndex}, cols ${x.startColumnIndex + 1}-${x.endColumnIndex}`).join('; ');
+        lines.push(`colour rule ${i + 1}: ${rg} :: ${(r.booleanRule?.condition?.values?.[0]?.userEnteredValue || '').slice(0, 120)}`);
+      });
+    }
     lines.push('', '## Problems found');
     health.issues.forEach((i) => lines.push(`- [${i.level}] ${i.sheet || ''}${i.row ? ` row ${i.row}` : ''}: ${i.message}`));
     if (!health.issues.length) lines.push('(none)');
@@ -636,6 +645,10 @@ export class GSheetsService {
       if (gp) grid = { rowCount: gp.rowCount ?? 1000, columnCount: gp.columnCount ?? 26 };
     }
 
+    // A dropdown (data validation) that someone added to the Schedule cells is not part of what the app writes.
+    // Remember it now so it can be put back over the whole grid after the rewrite.
+    const validation = sheet ? await this._scheduleValidation(title) : null;
+
     // Existing assignments are read BEFORE anything is changed.
     const existing = await this.getAssignmentsInRange("1970-01-01", "2100-01-01");
 
@@ -711,13 +724,19 @@ export class GSheetsService {
     // buildScheduleRequests starts with its own unmerge; ours already did that.
     const rest = built.filter((r) => !r.unmergeCells);
     const finalGrid = { rowCount: Math.max(needRows, grid.rowCount), columnCount: Math.max(needCols, grid.columnCount) };
+    // colour rules only over the cells in use (see buildDivisionColoringRules)
+    const used = { rowCount: cells ? cells.rows.length : 3, columnCount: needCols > 0 ? needCols - 1 : 3 };
+    const restoreValidation = validation
+      ? [{ setDataValidation: { range: { sheetId, startRowIndex: 2, endRowIndex: Math.max(used.rowCount, 3), startColumnIndex: 2, endColumnIndex: Math.max(used.columnCount, 3) }, rule: validation } }]
+      : [];
     const { model, tabs: tabTitles } = await this.fetchAllData();
     const { violations, marks } = this._checkPlacements(built.placements || [], model);
     await this.batchUpdate([
       ...resize,
       ...clearAll,
       ...rest,
-      ...buildDivisionColoringRules(sheetId, this._soldiersRef(model, tabTitles), finalGrid),
+      ...buildDivisionColoringRules(sheetId, this._soldiersRef(model, tabTitles), used),
+      ...restoreValidation,
       ...buildViolationMarkRequests(sheetId, marks, finalGrid),
     ]);
     this.clearCache();
@@ -858,6 +877,29 @@ export class GSheetsService {
       });
     }
     return { total: assignments.length, violations, marked: marks.length, liveChecks: live };
+  }
+
+  /** The first data-validation rule (dropdown) found in the Schedule cells, or null. */
+  async _scheduleValidation(title) {
+    try {
+      const params = new URLSearchParams({
+        ranges: `${quoteTab(title)}!C3:AZ60`,
+        fields: 'sheets(data(rowData(values(dataValidation))))',
+      });
+      const resp = await this.client.get(`/${this.spreadsheetId}?${params.toString()}`);
+      for (const sheet of resp.data.sheets || []) {
+        for (const data of sheet.data || []) {
+          for (const row of data.rowData || []) {
+            for (const cell of row.values || []) {
+              if (cell && cell.dataValidation) return cell.dataValidation;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not read the Schedule dropdown; it will not be restored', e);
+    }
+    return null;
   }
 
   async getHistoryScores(excludeFrom = null) {

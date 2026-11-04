@@ -267,6 +267,8 @@ const a1col = (i) => { let n = i + 1; let s = ''; while (n > 0) { const r = (n -
  * Conditional formatting for the Schedule tab:
  *  - a fill colour per division (looked up from the Soldiers tab by name; division n uses colour ((n-1) mod 10)+1)
  * The Soldiers tab and its Name/Division columns are located by header, so reordered columns still work.
+ * Keep `grid` close to the cells in use: a range of 1000 rows x 100 columns (100,000 cells, one lookup per cell and
+ * rule) made Google Sheets take a long time to paint the colours.
  * `soldiers` = { title, nameCol, divisionCol } (0-based column indexes); without both columns no rules are added.
  */
 export function buildDivisionColoringRules(sheetId, soldiers = { title: 'Soldiers', nameCol: 0, divisionCol: 1 }, grid = { rowCount: 1000, columnCount: 100 }) {

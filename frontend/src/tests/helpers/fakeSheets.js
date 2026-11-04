@@ -83,6 +83,12 @@ export class FakeSheets {
 
   async get(url) {
     this.calls.push(['GET', url]);
+    if (/\?ranges=/.test(url) && /dataValidation/.test(decodeURIComponent(url))) {
+      const q = new URLSearchParams(url.split('?')[1]);
+      const { sheet } = this._sheetFromRange(q.get('ranges'));
+      const hit = (sheet.validations || [])[0];
+      return { data: { sheets: [{ data: [{ rowData: hit ? [{ values: [{ dataValidation: hit.rule }] }] : [] }] }] } };
+    }
     let m = url.match(/^\/[^/?]+\?fields=/);
     if (m) {
       return { data: { properties: { locale: this.locale }, sheets: this.sheets.map((s) => ({ properties: { ...s.properties, gridProperties: { ...s.properties.gridProperties } }, merges: [...s.merges], conditionalFormats: [...s.conditionalFormats] })) } };
