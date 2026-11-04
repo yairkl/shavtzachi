@@ -21,6 +21,7 @@ import { DAY_TAB } from '../../services/dayView';
 import { generateShifts, solveShiftAssignmentGreedy } from '../../lib/schedulerCore';
 
 const TOKEN = process.env.GOOGLE_ACCESS_TOKEN;
+const REUSE_ID = process.env.GOOGLE_TEST_SPREADSHEET_ID;
 const MODE = TOKEN ? 'live' : (process.env.LIVE_DRYRUN ? 'fake' : null);
 
 const DAY = ['2025-03-10T06:00:00', '2025-03-11T06:00:00'];
@@ -38,12 +39,36 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
       ({ service, fake } = await makeService({}));
     }
     service.CACHE_TTL = 0;
-    try {
-      id = await service.createSpreadsheet(`Shavtzachi live test ${new Date().toISOString()}`);
-    } catch (e) {
-      // show Google's own explanation (API not enabled, no permission...), not just the status code
-      const body = e.response?.data;
-      throw new Error(`Could not create the test spreadsheet (HTTP ${e.response?.status}): ${body ? JSON.stringify(body) : e.message}`);
+    if (MODE === 'live' && REUSE_ID) {
+      // A service account often may not create files, so CI points at a spreadsheet you own and shared with it (Editor).
+      // Start every run from the same state: four empty tabs.
+      id = REUSE_ID;
+      const base = `https://sheets.googleapis.com/v4/spreadsheets/${id}`;
+      const headers = { Authorization: `Bearer ${TOKEN}` };
+      try {
+        const { data } = await axios.get(`${base}?fields=sheets.properties.sheetId`, { headers });
+        const fresh = (title, extra = {}) => ({ addSheet: { properties: { title, ...extra } } });
+        await axios.post(`${base}:batchUpdate`, { requests: [
+          fresh('live-test-keep'),
+          ...data.sheets.map((sh) => ({ deleteSheet: { sheetId: sh.properties.sheetId } })),
+          fresh('Soldiers'), fresh('Posts'), fresh('Unavailabilities'),
+          fresh('Schedule', { gridProperties: { frozenRowCount: 2, frozenColumnCount: 2 } }),
+        ] }, { headers });
+        const kept = (await axios.get(`${base}?fields=sheets.properties(sheetId,title)`, { headers })).data.sheets.find((sh) => sh.properties.title === 'live-test-keep');
+        await axios.post(`${base}:batchUpdate`, { requests: [{ deleteSheet: { sheetId: kept.properties.sheetId } }] }, { headers });
+      } catch (e) {
+        throw new Error(`Could not reset the shared test spreadsheet (HTTP ${e.response?.status}): ${e.response?.data ? JSON.stringify(e.response.data) : e.message}. Is it shared with the service account as Editor?`);
+      }
+      service.setSpreadsheetId(id);
+      await service.ensureSchema({ force: true });
+    } else {
+      try {
+        id = await service.createSpreadsheet(`Shavtzachi live test ${new Date().toISOString()}`);
+      } catch (e) {
+        // show Google's own explanation (API not enabled, no permission...), not just the status code
+        const body = e.response?.data;
+        throw new Error(`Could not create the test spreadsheet (HTTP ${e.response?.status}): ${body ? JSON.stringify(body) : e.message}. A service account often cannot create files: set GOOGLE_TEST_SPREADSHEET_ID to a spreadsheet shared with it.`);
+      }
     }
     // Type values exactly as a person would: Google parses them (TRUE -> checkbox-like boolean, 6:00 -> time, dates -> date cells).
     await put("'Soldiers'!A2", [['Dan', '1', 'guard', ''], ['Eli', '2', 'Guard, medic', ''], ['Avi', '1', 'guard', ''], ['Ben', '2', 'guard', ''], ['Gil', '1', 'medic', '']]);
@@ -56,7 +81,7 @@ describe.skipIf(!MODE)(`real Google Sheets behaviour (${MODE})`, () => {
   }, 60000);
 
   afterAll(async () => {
-    if (MODE !== 'live' || !id) return;
+    if (MODE !== 'live' || !id || REUSE_ID) return; // a shared spreadsheet is kept (it is reset at the start of the next run)
     try {
       await axios.delete(`https://www.googleapis.com/drive/v3/files/${id}`, { headers: { Authorization: `Bearer ${TOKEN}` } });
     } catch {

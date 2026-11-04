@@ -55,4 +55,7 @@ jobs:
         working-directory: frontend
         env:
           GOOGLE_ACCESS_TOKEN: ${{ steps.auth.outputs.token }}
+          # optional: a spreadsheet you own, shared with the service account as Editor (the test resets it every run).
+          # Needed when the service account may not create files itself.
+          GOOGLE_TEST_SPREADSHEET_ID: ${{ vars.GOOGLE_TEST_SPREADSHEET_ID }}
         run: npm run test:live

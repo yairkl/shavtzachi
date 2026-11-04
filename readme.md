@@ -74,7 +74,8 @@ One-time setup (about 5 minutes):
 2. IAM & Admin -> Service Accounts -> **Create service account** (for example `shavtzachi-ci`). It needs no roles.
 3. Open it -> Keys -> **Add key -> Create new key -> JSON**. A file downloads.
 4. In the GitHub repository: Settings -> Secrets and variables -> Actions -> **New repository secret** named `GOOGLE_SA_KEY`, value = the whole contents of that JSON file. Then delete the downloaded file.
-5. Run it: Actions -> **Live Google test** -> Run workflow. To also run it every Monday, add a repository *variable* `GOOGLE_LIVE_TESTS` = `true`.
+5. If the run stops with `PERMISSION_DENIED` when creating the spreadsheet (service accounts often may not create files): create an empty spreadsheet in your own Drive, share it with the service account's e-mail (`client_email` in the JSON) as **Editor**, and add a repository *variable* `GOOGLE_TEST_SPREADSHEET_ID` = the long id from its URL. The test then resets that spreadsheet at the start of every run instead of creating one (do not use a spreadsheet with real data).
+6. Run it: Actions -> **Live Google test** -> Run workflow. To also run it every Monday, add a repository *variable* `GOOGLE_LIVE_TESTS` = `true`.
 
 Notes: the workflow does not run on pull requests (forks cannot read secrets, and it writes to a real Google account). The workflow signs its own token request with the key (`frontend/scripts/service-account-token.mjs`), so only the Sheets and Drive APIs need to be enabled: no IAM Credentials API and no extra permission on the service account. To run it from your own machine, use the one-hour token from the browser as described above.
 
