@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 
 import Layout from './components/Layout';
@@ -15,11 +15,30 @@ import { getAuthStatus } from './services/api';
 import { gsheetsService } from './services/gsheetsService';
 import { onSessionEvent, requestToken } from './services/auth';
 import { notify } from './lib/notify';
+import { SheetAccessContext } from './lib/sheetAccess';
 
 function App() {
   const [authStatus, setAuthStatus] = useState({ authenticated: null, backend: null });
   const [loading, setLoading] = useState(true);
   const [sessionExpired, setSessionExpired] = useState(false);
+  // 'checking' | 'ok' | 'denied': whether this Google account can open the configured spreadsheet
+  const [access, setAccess] = useState({ state: 'checking', message: '' });
+  const authenticated = !!authStatus.authenticated;
+  const hasSheet = !!gsheetsService.getSpreadsheetId();
+
+  const recheckAccess = useCallback(async () => {
+    const res = await gsheetsService.checkAccess();
+    setAccess(res.ok ? { state: 'ok', message: '' } : { state: 'denied', message: res.message });
+  }, []);
+
+  useEffect(() => {
+    if (!authenticated || !hasSheet) return undefined;
+    let cancelled = false;
+    gsheetsService.checkAccess().then((res) => {
+      if (!cancelled) setAccess(res.ok ? { state: 'ok', message: '' } : { state: 'denied', message: res.message });
+    });
+    return () => { cancelled = true; };
+  }, [authenticated, hasSheet]);
 
 
   useEffect(() => {
@@ -71,10 +90,19 @@ function App() {
     return <Login authStatus={authStatus} authError={authError} />;
   }
 
-  const hasSheet = !!gsheetsService.getSpreadsheetId();
   if (!hasSheet) {
     return <Setup />;
   }
+
+  if (access.state === 'checking') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#020617] text-slate-400 animate-pulse">
+        Checking access to your spreadsheet...
+      </div>
+    );
+  }
+
+  const denied = access.state === 'denied';
 
   return (
     <Router>
@@ -84,17 +112,28 @@ function App() {
           <button onClick={reconnect} className="underline font-bold">Reconnect</button>
         </div>
       )}
-      <Layout>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/scheduler" element={<Scheduler />} />
-          <Route path="/soldiers" element={<Soldiers />} />
-          <Route path="/posts" element={<Posts />} />
-          <Route path="/unavailability" element={<Unavailability />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Layout>
+      <SheetAccessContext.Provider value={{ denied, message: access.message, recheck: recheckAccess }}>
+        <Layout locked={denied}>
+          <Routes>
+            {denied ? (
+              <>
+                <Route path="/settings" element={<Settings />} />
+                <Route path="*" element={<Navigate to="/settings" replace />} />
+              </>
+            ) : (
+              <>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/scheduler" element={<Scheduler />} />
+                <Route path="/soldiers" element={<Soldiers />} />
+                <Route path="/posts" element={<Posts />} />
+                <Route path="/unavailability" element={<Unavailability />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </>
+            )}
+          </Routes>
+        </Layout>
+      </SheetAccessContext.Provider>
     </Router>
   );
 }

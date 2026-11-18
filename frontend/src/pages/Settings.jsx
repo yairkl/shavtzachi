@@ -7,10 +7,12 @@ import { Label } from '@/components/ui/label';
 import { useConfirm } from '@/lib/notify';
 import { describeError } from '@/lib/errors';
 import { SheetHealthCard } from '@/components/SheetHealth';
-import { Save, ExternalLink, Info } from 'lucide-react';
+import { useSheetAccess } from '@/lib/sheetAccess';
+import { Save, ExternalLink, Info, ShieldAlert } from 'lucide-react';
 
 export default function Settings() {
   const confirm = useConfirm();
+  const access = useSheetAccess();
   const [spreadsheetId, setSpreadsheetId] = useState(gsheetsService.getSpreadsheetId());
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
@@ -35,6 +37,7 @@ export default function Settings() {
         return;
       }
       setSpreadsheetId(id);
+      await access.recheck();
       setMessage({ type: 'success', text: 'Settings saved successfully!' });
       setTimeout(() => setMessage({ type: '', text: '' }), 3000);
     } finally {
@@ -52,6 +55,18 @@ export default function Settings() {
           Configure your application preferences and Google Sheets integration.
         </p>
       </div>
+
+      {access.denied && (
+        <div role="alert" className="p-4 rounded-lg border border-red-500/30 bg-red-500/10 flex gap-3 text-sm">
+          <ShieldAlert className="h-5 w-5 shrink-0 text-red-400" />
+          <div className="space-y-1">
+            <p className="font-semibold text-red-300">The app cannot open this spreadsheet</p>
+            <p className="opacity-90">{access.message}</p>
+            <p className="opacity-80">The other pages are locked until this is fixed. Ask the owner to share the spreadsheet with your Google account as an editor, or choose another spreadsheet below.</p>
+            <Button size="sm" variant="outline" onClick={access.recheck}>Try again</Button>
+          </div>
+        </div>
+      )}
 
       <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
         <CardHeader>

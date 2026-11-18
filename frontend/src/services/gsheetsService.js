@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { requestToken, notifyExpired } from './auth';
 import { notify } from '../lib/notify';
+import { isAccessError, describeError } from '../lib/errors';
 import { parseGrid, buildScheduleRequests, buildDivisionColoringRules } from './gsheetsUtils';
 import { TABS, COLUMN_SPECS, buildModel, mapColumns, composeRow, colLetter, normalizeKey } from '../lib/sheetModel';
 import { parseISO, differenceInSeconds, isBefore, isAfter } from 'date-fns';
@@ -209,6 +210,22 @@ export class GSheetsService {
       assignments: null,
     };
     return this.cache;
+  }
+
+  /**
+   * Can this account open the spreadsheet? Returns { ok: true }, or { ok: false, message } when Google refuses
+   * (no permission / not found). Transient trouble (offline, rate limit, expired session, server error) is not
+   * reported as missing access.
+   */
+  async checkAccess() {
+    this.clearCache();
+    try {
+      await this.fetchAllData();
+      return { ok: true };
+    } catch (err) {
+      if (isAccessError(err)) return { ok: false, message: describeError(err) };
+      return { ok: true };
+    }
   }
 
   /** Problems found in the spreadsheet (missing tabs/columns, invalid values...). */

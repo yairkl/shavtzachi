@@ -1,6 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp } from './helpers/harness.js';
+import { FakeSheets } from '../src/tests/helpers/fakeSheets.js';
 
 let app;
 before(async () => { app = await startApp(); });
@@ -139,5 +140,27 @@ test('Excel export of a saved schedule downloads a real file, and the soldiers C
   assert.match(text, /Name,Division,Skills,Excluded Posts/);
   assert.match(text, /Eli,2,"Guard, medic"|Eli,2,"guard, medic"/i);
   assert.deepEqual(s.problems, []);
+  await s.context.close();
+});
+
+test('without access to the spreadsheet the app is locked to Settings, and unlocks once access is back', async () => {
+  const fake = new FakeSheets(messySheet());
+  fake.deny = { status: 403, message: 'The caller does not have permission' };
+  const s = await app.open(messySheet(), { fake });
+  await s.go('/scheduler'); // any page: the app sends you to Settings
+  await s.page.getByRole('alert').filter({ hasText: 'cannot open this spreadsheet' }).waitFor();
+  assert.match(s.page.url(), /#\/settings$/);
+  assert.equal(await s.page.getByRole('link', { name: 'Scheduler' }).count(), 0, 'other pages are not reachable from the menu');
+  assert.ok(await s.page.getByRole('link', { name: 'Settings' }).count() > 0);
+  await s.page.evaluate(() => { window.location.hash = '#/soldiers'; });
+  await s.page.getByRole('alert').filter({ hasText: 'cannot open this spreadsheet' }).waitFor();
+  assert.match(s.page.url(), /#\/settings$/, 'typing another address does not get past the lock');
+  // access restored (for example the owner shared the sheet): Try again unlocks everything
+  fake.deny = null;
+  await s.page.getByRole('button', { name: 'Try again' }).click();
+  await s.page.getByRole('link', { name: 'Scheduler' }).waitFor();
+  assert.equal(await s.page.getByRole('alert').filter({ hasText: 'cannot open this spreadsheet' }).count(), 0);
+  await s.page.getByRole('link', { name: 'Soldiers' }).click();
+  await s.page.getByText('Dan').first().waitFor();
   await s.context.close();
 });

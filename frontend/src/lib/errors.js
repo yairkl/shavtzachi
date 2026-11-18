@@ -25,3 +25,14 @@ export function describeError(err, fallback = 'Something went wrong.') {
   }
   return err.message || fallback;
 }
+
+/**
+ * True when Google says this account cannot use the spreadsheet (no permission, or it does not exist / is not shared
+ * with it). Rate limiting, an expired session and network or server trouble are NOT access problems.
+ */
+export function isAccessError(err) {
+  const status = err?.response?.status;
+  if (status === 404) return true;
+  if (status !== 403) return false;
+  return !/quota|rate/i.test(err.response?.data?.error?.message || '');
+}

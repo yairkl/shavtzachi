@@ -25,7 +25,7 @@ const navItems = [
   { icon: SettingsIcon, label: 'Settings', path: '/settings' },
 ];
 
-export default function Layout({ children }) {
+export default function Layout({ children, locked = false }) {
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
 
@@ -64,7 +64,17 @@ export default function Layout({ children }) {
         </div>
 
         <nav className="flex-1 px-4 space-y-2 mt-4 md:mt-4">
-          {navItems.map((item) => (
+          {navItems.map((item) => (locked && item.path !== '/settings' ? (
+            <span
+              key={item.path}
+              aria-disabled="true"
+              title="Unavailable until the app can open your spreadsheet"
+              className="flex items-center gap-3 px-3 py-2 rounded-lg text-muted-foreground/40 cursor-not-allowed select-none"
+            >
+              <item.icon className="w-5 h-5" />
+              <span className="font-medium">{item.label}</span>
+            </span>
+          ) : (
             <Link
               key={item.path}
               to={item.path}
@@ -81,7 +91,7 @@ export default function Layout({ children }) {
               )} />
               <span className="font-medium">{item.label}</span>
             </Link>
-          ))}
+          )))}
         </nav>
 
         <div className="p-4 border-t border-border mt-auto">

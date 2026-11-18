@@ -33,6 +33,7 @@ export class FakeSheets {
     this.sheets = [];
     this.calls = [];
     this.failNextBatch = null;
+    this.deny = null; // { status, message }: every request fails like Google refusing this account
     Object.entries(tabs).forEach(([title, values]) => this._addSheet(title, values));
   }
 
@@ -82,6 +83,7 @@ export class FakeSheets {
   }
 
   async get(url) {
+    if (this.deny) throw apiError(this.deny.status, this.deny.message);
     this.calls.push(['GET', url]);
     let m = url.match(/^\/[^/?]+\?fields=/);
     if (m) {
@@ -98,6 +100,7 @@ export class FakeSheets {
   }
 
   async put(url, body) {
+    if (this.deny) throw apiError(this.deny.status, this.deny.message);
     this.calls.push(['PUT', url, body]);
     const m = url.match(/^\/[^/?]+\/values\/(.+?)(\?.*)?$/);
     if (!m) throw apiError(404, `Unexpected PUT ${url}`);
@@ -108,6 +111,7 @@ export class FakeSheets {
   }
 
   async post(url, body) {
+    if (this.deny) throw apiError(this.deny.status, this.deny.message);
     this.calls.push(['POST', url, body]);
     let m = url.match(/^\/[^/?]+\/values\/(.+?):(append|clear)(\?.*)?$/);
     if (m) {
