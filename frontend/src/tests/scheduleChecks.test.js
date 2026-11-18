@@ -203,7 +203,7 @@ describe('schedule rules in the spreadsheet', () => {
     const { service, fake } = await makeService(tabs({ Soldiers: [['Skills', 'Division', 'Name'], ['guard', '1', 'Dan'], ['guard', '2', 'Eli']] }));
     await service.saveAssignments(d(6).toISOString(), d(22).toISOString(), [asg('Dan', 'Gate', 6, 14)]);
     const rules = fake.tab('Schedule').conditionalFormats.map((r) => r.booleanRule.condition.values[0].userEnteredValue);
-    expect(rules.length).toBe(DIVISION_COLORS.length);
+    expect(rules.length).toBe(DIVISION_COLORS.length + 2); // 10 division colours + the 2 live-check rules
     expect(rules.some((f) => f.includes(`'Soldiers'!$C$2:$C`) && f.includes(`'Soldiers'!$B$2:$B`))).toBe(true);
   });
 });

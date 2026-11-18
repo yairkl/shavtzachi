@@ -32,11 +32,12 @@ The Soldiers, Posts and Unavailabilities tabs are meant to be edited directly in
 
 ### Schedule rules in the sheet
 
-The Schedule tab is coloured by division (10 colours, looked up from the Soldiers tab by header, so reordered columns work). Mistakes made while editing it by hand are caught on demand and on every save:
+The Schedule tab is coloured by division (10 colours, looked up from the Soldiers tab by header, so reordered columns work). Mistakes made while editing it by hand are caught in two ways:
 
-- *Settings -> Spreadsheet health -> Check schedule* (and every Save in the Scheduler) checks all saved assignments for double booking, cooldown, missing skills, excluded posts, unavailability and people missing from the roster. Problem cells get bold red text and a note explaining why. These marks refresh only when you save or check again.
+- **Live, in the sheet - for shifts of any duration.** A helper tab, *Schedule Check*, expands every shift over all the rows it covers (using its post's shift length, because merged cells only hold the name in their first row) and flags problems with formulas. In the Schedule tab a cell turns **red** when the same person is on another post at the same time (a 24h shift and a 4h shift are compared correctly) and **amber** when they get less rest than a cooldown allows. Typing a name takes effect immediately. The helper tab is regenerated on every Save and by *Check schedule*; press that if you change a post's shift length or cooldown, or add rows or columns, by hand.
+- **On demand and on every save:** *Settings -> Spreadsheet health -> Check schedule* (and every Save in the Scheduler) checks all saved assignments for double booking, cooldown, missing skills, excluded posts, unavailability and people missing from the roster. Problem cells get bold red text and a note explaining why. These marks refresh only when you save or check again.
 
-Cooldown means the rest needed after finishing a shift of a post: the gap before the next shift must be at least the cooldown of the earlier shift's post. Both shifts of the pair are flagged.
+Cooldown means the rest needed after finishing a shift of a post: the gap before the next shift must be at least the cooldown of the earlier shift's post. Both shifts of the pair are flagged. The helper formulas are checked in the unit tests with a spreadsheet engine against the app's rule engine on random schedules.
 
 ### Assigning by hand
 
@@ -46,7 +47,7 @@ Each slot has its **own dropdown listing everyone, best fit first**, ordered by 
 
 ### Updating an existing spreadsheet
 
-Open **Settings -> Spreadsheet health -> Update whole spreadsheet** (after a confirmation). In one step it adds any missing tabs and columns, formats the Soldiers, Posts and Unavailabilities tabs for editing, and rebuilds the Schedule tab with the division colours and the soldier dropdown. It never changes your data: every row and every saved assignment is written back exactly as it was, your own dropdown / formatting rules / named ranges are kept, and it can be run as often as you like. The same things also happen automatically whenever you save a schedule.
+Open **Settings -> Spreadsheet health -> Update whole spreadsheet** (after a confirmation). In one step it adds any missing tabs and columns, formats the Soldiers, Posts and Unavailabilities tabs for editing, and rebuilds the Schedule tab with the division colours, the soldier dropdown, the live double-booking checks. It never changes your data: every row and every saved assignment is written back exactly as it was, your own dropdown / formatting rules / named ranges are kept, and it can be run as often as you like. The same things also happen automatically whenever you save a schedule.
 
 ### Tests
 
@@ -75,6 +76,14 @@ Notes: the workflow does not run on pull requests (forks cannot read secrets, an
 Pull requests run lint, the unit and contract tests, and the browser tests (`.github/workflows/ci.yml`).
 
 Pushes to `master` run the tests, build the app and deploy it to GitHub Pages (`.github/workflows/deploy.yml`).
+
+## Speed
+
+Everything the spreadsheet calculates by itself (the live double-booking colours) is a formula, and a lot of formulas make a spreadsheet slow, especially in the phone app. So the app keeps them within a budget:
+
+- the live checks cover the most recent rows only, at most about 9,000 helper formulas (a schedule with 12 columns checks about 250 rows, 24 columns about 125; narrower ones up to 336); older days are covered by *Check schedule*, which uses no formulas at all;
+- the red/amber colours are applied to exactly the checked block, not the whole sheet;
+- if the spreadsheet still feels slow, delete the **Schedule Check** tab: the Schedule tab and all data keep working, and *Check schedule* in the app still marks every problem with a note.
 
 ## Google sign-in
 
