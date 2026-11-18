@@ -205,6 +205,11 @@ test('saving from the app gives the Schedule tab a soldier dropdown over the who
   assert.ok(plain.length >= 1, 'a plain soldier list over the whole schedule');
   assert.match(plain[0].rule.condition.values[0].userEnteredValue, /^='Soldiers'!\$A\$2:\$A$/);
   assert.ok(plain[0].range.endRowIndex >= s.fake.rows('Schedule').length, 'covers every row of the schedule');
+  // and each slot has its own list of everyone, best fit first, plus a note on the empty ones
+  const lists = rules.filter((r) => r.rule.condition.type === 'ONE_OF_LIST');
+  assert.ok(lists.length >= 5, `expected a list per slot, got ${lists.length}`);
+  assert.equal(lists[0].rule.condition.values.length, 4, 'everyone is offered');
+  assert.ok(Object.values(s.fake.tab('Schedule').notes || {}).some((n) => /Best fits|Nobody fits/.test(n)), 'empty slots explain who fits');
   assert.deepEqual(s.problems, []);
   await s.context.close();
 });
