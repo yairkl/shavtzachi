@@ -6,6 +6,7 @@ import { parseGrid, buildScheduleRequests, buildDivisionColoringRules, buildViol
 import { isOurDropdown, rankForSlot, suggestionNote, listRule, workload, MAX_LIST_BLOCKS } from './assignmentLists';
 import { validateAssignments } from '../lib/scheduleValidation';
 import { generateShifts } from '../lib/schedulerCore';
+import { CHECK_TAB, planLiveChecks, buildLiveCheckCells, buildLiveCheckRules, isLiveCheckRule, estimateSize, MAX_FORMULA_CHARS } from './liveChecks';
 import { TABS, COLUMN_SPECS, buildModel, mapColumns, composeRow, colLetter, normalizeKey, toSheetDateTime } from '../lib/sheetModel';
 import { parseISO, differenceInSeconds, isBefore, isAfter, addMinutes } from 'date-fns';
 
@@ -769,8 +770,12 @@ export class GSheetsService {
       ...buildViolationMarkRequests(sheetId, marks, finalGrid),
     ]);
     this.clearCache();
+    const live = await this.refreshLiveChecks().catch((e) => {
+      console.warn('Could not update the live schedule checks', e);
+      return { ok: false, reason: 'error' };
+    });
     await this.refreshAssignmentLists().catch((e) => console.warn('Could not update the assignment dropdowns', e));
-    return { violations };
+    return { violations, liveChecks: live };
   }
 
   /**
@@ -860,7 +865,7 @@ export class GSheetsService {
 
   /**
    * Bring an existing spreadsheet fully up to date in one go: missing tabs/columns, formatting and validation of the data
-   * tabs, and the Schedule tab's colours, soldier dropdown, per-slot dropdowns and problem marks.
+   * tabs, and the Schedule tab's colours, soldier dropdown, live checks, per-slot dropdowns and problem marks.
    * No cell content is changed: the saved assignments are read and written back exactly as they are.
    * Returns { steps: string[], assignments, violations }.
    */
@@ -881,8 +886,72 @@ export class GSheetsService {
     await this.saveAssignments('1970-01-01T00:00:00', '1970-01-02T00:00:00', [], { rewriteOnly: true });
     steps.push(`Rebuilt the Schedule tab with colours and the soldier dropdown (${existing.length} assignments kept)`);
     const check = await this.checkSchedule({ mark: true });
+    steps.push('Updated the live checks');
     steps.push(check.violations.length ? `${check.violations.length} schedule problem(s) marked in red` : 'No schedule problems found');
     return { steps, assignments: existing.length, violations: check.violations.length };
+  }
+
+  /**
+   * (Re)generate the "Schedule Check" helper tab and the conditional formatting that shows, live while you edit
+   * the Schedule tab, who is double-booked (red) or has too little rest (amber) - for shifts of any duration.
+   * Returns { ok, reason? }.
+   */
+  async refreshLiveChecks() {
+    this.clearCache();
+    const cache = await this.fetchAllData();
+    const scheduleTitle = cache.tabs.Schedule;
+    const schedule = scheduleTitle ? cache.metadata.find((m) => m.properties.title === scheduleTitle) : null;
+    if (!schedule) return { ok: false, reason: 'no-schedule' };
+    const helper = cache.metadata.find((m) => m.properties.title === CHECK_TAB);
+    const sheetId = schedule.properties.sheetId;
+    const rules = schedule.conditionalFormats || [];
+
+    const requests = [];
+    // forget the previous live rules (highest index first so the remaining indexes stay valid)
+    rules.map((r, i) => (isLiveCheckRule(r) ? i : -1)).filter((i) => i >= 0).reverse()
+      .forEach((index) => requests.push({ deleteConditionalFormatRule: { sheetId, index } }));
+
+    const plan = planLiveChecks(cache.raw.Schedule, cache.model.posts);
+    const cells = plan ? buildLiveCheckCells(plan, scheduleTitle) : null;
+    if (cells && estimateSize(cells) > MAX_FORMULA_CHARS) {
+      if (requests.length) await this.batchUpdate(requests);
+      return { ok: false, reason: 'too-large' };
+    }
+
+    let helperId = helper?.properties.sheetId;
+    if (cells) {
+      const rowCount = cells.length + 5;
+      const columnCount = Math.max(...cells.map((r) => r.length)) + 2;
+      if (!helper) {
+        helperId = Math.max(0, ...cache.metadata.map((m) => m.properties.sheetId)) + 1000;
+        requests.push({ addSheet: { properties: { sheetId: helperId, title: CHECK_TAB, tabColorStyle: { rgbColor: { red: 0.6, green: 0.6, blue: 0.6 } }, gridProperties: { rowCount, columnCount } } } });
+      } else {
+        const gp = helper.properties.gridProperties || {};
+        if ((gp.rowCount || 0) < rowCount || (gp.columnCount || 0) < columnCount) {
+          requests.push({ updateSheetProperties: { properties: { sheetId: helperId, gridProperties: { rowCount: Math.max(rowCount, gp.rowCount || 0), columnCount: Math.max(columnCount, gp.columnCount || 0) } }, fields: 'gridProperties(rowCount,columnCount)' } });
+        }
+        requests.push({ repeatCell: { range: { sheetId: helperId }, cell: {}, fields: 'userEnteredValue' } });
+      }
+      const toCell = (v) => (v === '' ? {} : v.startsWith('=') ? { userEnteredValue: { formulaValue: v } } : { userEnteredValue: { stringValue: v } });
+      requests.push({
+        updateCells: {
+          range: { sheetId: helperId, startRowIndex: 0, startColumnIndex: 0 },
+          rows: cells.map((row) => {
+            let end = row.length;
+            while (end > 0 && row[end - 1] === '') end -= 1;
+            return { values: row.slice(0, end).map(toCell) };
+          }),
+          fields: 'userEnteredValue',
+        },
+      });
+      requests.push(...buildLiveCheckRules(sheetId, plan));
+    } else if (helper) {
+      requests.push({ repeatCell: { range: { sheetId: helperId }, cell: {}, fields: 'userEnteredValue' } });
+    }
+
+    if (requests.length) await this.batchUpdate(requests);
+    this.clearCache();
+    return { ok: !!cells, reason: cells ? undefined : 'empty-schedule' };
   }
 
   /** Where to find soldier names and divisions, for the division colours in the Schedule tab. */
@@ -939,13 +1008,19 @@ export class GSheetsService {
     const assignments = this._scheduleAssignments(cache);
     const placements = assignments.filter((a) => a.row !== undefined).map((a) => ({ assignment: a, row: a.row, col: a.col }));
     const { violations, marks } = this._checkPlacements(placements, cache.model);
+    let live = null;
     if (mark) {
       const gp = sheet.properties.gridProperties || {};
       await this.batchUpdate(buildViolationMarkRequests(sheet.properties.sheetId, marks, { rowCount: gp.rowCount, columnCount: gp.columnCount }));
       this.clearCache();
+      // pick up hand-made changes to the schedule's structure (new columns/rows, edited post lengths)
+      live = await this.refreshLiveChecks().catch((e) => {
+        console.warn('Could not update the live schedule checks', e);
+        return { ok: false, reason: 'error' };
+      });
       await this.refreshAssignmentLists().catch((e) => console.warn('Could not update the assignment dropdowns', e));
     }
-    return { total: assignments.length, violations, marked: marks.length };
+    return { total: assignments.length, violations, marked: marks.length, liveChecks: live };
   }
 
   /** A dropdown of the Soldiers tab's names (found by header, so reordered columns work), or null without a Soldiers tab. */

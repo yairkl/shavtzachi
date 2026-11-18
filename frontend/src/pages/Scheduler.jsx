@@ -290,7 +290,9 @@ export default function Scheduler() {
       const { data: saved } = await saveSchedule(start, endStr, payload);
       setShifts(prev => prev.map(s => ({ ...s, persisted: s.soldier_id != null })));
       setIsDraft(false);
-      if (saved.violations.length) {
+      if (saved.liveChecks && !saved.liveChecks.ok && saved.liveChecks.reason === 'error') {
+        notify.info(`Saved ${payload.length} assignment(s), but the live checks in the sheet could not be refreshed. Use "Check schedule" in Settings.`);
+      } else if (saved.violations.length) {
         notify.info(`Saved ${payload.length} assignment(s). ${saved.violations.length} rule problem(s) were marked in the sheet with red text and a note.`);
       } else {
         notify.success(`Saved ${payload.length} assignment(s) to the spreadsheet.`);
