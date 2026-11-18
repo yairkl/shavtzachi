@@ -99,7 +99,7 @@ export function SheetHealthCard({ compact = false }) {
   const updateAll = async () => {
     const ok = await confirm({
       title: 'Update the whole spreadsheet?',
-      description: 'Adds any missing tabs and columns, formats the Soldiers, Posts and Unavailabilities tabs for editing, and rebuilds the Schedule tab with division colours, the soldier dropdown, live double-booking checks and rule-problem marks. All your data and every saved assignment are kept exactly as they are. Formatting rules you added yourself are kept; the app refreshes only its own.',
+      description: 'Adds any missing tabs and columns, formats the Soldiers, Posts and Unavailabilities tabs for editing, and rebuilds the Schedule tab with division colours, the soldier dropdown, live double-booking checks, the Day View and jump links. All your data and every saved assignment are kept exactly as they are. Formatting rules you added yourself are kept; the app refreshes only its own.',
       confirmText: 'Update',
     });
     if (!ok) return;
@@ -234,7 +234,7 @@ export function SheetHealthCard({ compact = false }) {
           <Button variant="outline" size="sm" className="gap-2" onClick={repair} disabled={busy} title="Creates missing tabs and header columns. Never changes existing data.">
             <Wrench className="w-4 h-4" /> Repair sheet structure
           </Button>
-          <Button size="sm" className="gap-2" onClick={updateAll} disabled={busy} title="One click: formats every tab, rebuilds the Schedule tab's colours, dropdown and live checks, and marks rule problems. Nothing you entered is changed.">
+          <Button size="sm" className="gap-2" onClick={updateAll} disabled={busy} title="One click: formats every tab, rebuilds the Schedule tab's colours, dropdown and live checks, and builds the Day View. Nothing you entered is changed.">
             <Sparkles className="w-4 h-4" /> Update whole spreadsheet
           </Button>
           <Button variant="outline" size="sm" className="gap-2" onClick={format} disabled={busy} title="Dropdowns, validation, formats and highlighting for editing the sheet by hand. Never changes cell contents.">

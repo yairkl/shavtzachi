@@ -227,6 +227,53 @@ test('Check schedule sets up live checks that flag a 24h shift vs a 4h shift of 
   await s.context.close();
 });
 
+test('"Day in Sheets" builds the Day View for the day on screen and opens it', async () => {
+  const { HyperFormula } = await import('hyperformula');
+  const s = await app.open(messySheet());
+  await s.context.route('https://docs.google.com/**', (r) => r.fulfill({ status: 200, contentType: 'text/html', body: '<title>sheet</title>' }));
+  await s.go('/scheduler');
+  await s.page.getByRole('button', { name: /Auto Assign/ }).click();
+  await s.toast(/Assigned all/);
+  await s.page.getByRole('button', { name: /Save/ }).first().click();
+  await s.toast(/Saved \d+ assignment/);
+
+  const [popup] = await Promise.all([s.context.waitForEvent('page'), s.page.getByRole('button', { name: /Day in Sheets/ }).click()]);
+  await popup.waitForURL(/docs\.google\.com\/spreadsheets\/d\/test-sheet\/edit#gid=\d+/);
+  const day = s.fake.rows('Day View')[0][1];
+  assert.match(day, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(day, new Date().toISOString().slice(0, 10), 'opened on the day shown in the app');
+
+  // the table the spreadsheet would show for that day has real names in it
+  const hf = HyperFormula.buildFromSheets({ Schedule: s.fake.rows('Schedule'), 'Day View': s.fake.rows('Day View') }, { licenseKey: 'gpl-v3' });
+  const id = hf.getSheetId('Day View');
+  const shown = hf.getSheetValues(id).slice(4, 40).flat().filter((v) => typeof v === 'string' && /^(Dan|Eli|Avi|Ben)$/.test(v));
+  assert.ok(shown.length >= 4, `expected assigned names in the Day View, got ${shown.length}`);
+  assert.deepEqual(s.problems, []);
+  await s.context.close();
+});
+
+test('"Edit in Sheets" opens the Schedule tab at the first row of the day on screen', async () => {
+  const s = await app.open(messySheet());
+  await s.context.route('https://docs.google.com/**', (r) => r.fulfill({ status: 200, contentType: 'text/html', body: '<title>sheet</title>' }));
+  await s.go('/scheduler');
+  await s.page.getByRole('button', { name: /Auto Assign/ }).click();
+  await s.toast(/Assigned all/);
+  await s.page.getByRole('button', { name: /Save/ }).first().click();
+  await s.toast(/Saved \d+ assignment/);
+
+  const [popup] = await Promise.all([s.context.waitForEvent('page'), s.page.getByRole('button', { name: /Edit in Sheets/ }).click()]);
+  await popup.waitForURL(/edit#gid=\d+&range=A\d+/);
+  const gid = Number(popup.url().match(/gid=(\d+)/)[1]);
+  const row = Number(popup.url().match(/range=A(\d+)/)[1]);
+  assert.equal(gid, s.fake.tab('Schedule').properties.sheetId);
+  const today = new Date();
+  const label = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
+  assert.equal(s.fake.rows('Schedule')[row - 1][0], label, 'the row it jumps to is the first row of today');
+  assert.ok(s.fake.namedRanges.some((n) => n.name.startsWith('Day_')), 'Name Box shortcuts exist');
+  assert.deepEqual(s.problems, []);
+  await s.context.close();
+});
+
 test('saving from the app gives the Schedule tab a soldier dropdown over the whole schedule', async () => {
   const s = await app.open(messySheet());
   await s.go('/scheduler');
@@ -267,8 +314,10 @@ test('"Update whole spreadsheet" brings an old sheet up to date without changing
   await s.page.getByRole('alertdialog').getByRole('button', { name: 'Update' }).click();
   await s.toast(/Spreadsheet updated|schedule problem/);
   assert.equal(JSON.stringify(s.fake.rows('Soldiers').slice(1)) + JSON.stringify(s.fake.rows('Posts').slice(1)), dataBefore, 'data rows untouched');
+  assert.ok(s.fake.tab('Day View'), 'Day View built');
   assert.ok(s.fake.tab('Schedule').validations.length > 0, 'soldier dropdown on the schedule');
   assert.ok(s.fake.tab('Soldiers').validations.length > 0, 'data tabs formatted');
+  assert.ok(s.fake.namedRanges.some((n) => n.name === 'Day_2025_03_10'), 'jump shortcuts');
   assert.deepEqual(s.problems, []);
   await s.context.close();
 });
