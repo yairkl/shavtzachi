@@ -34,9 +34,12 @@ export function chooseStepMinutes(assignments, origin) {
 /**
  * Port of build_schedule_requests.
  * timeGranularityHours: fixed row height in hours, or omit/null to choose one that fits all shifts.
- * The returned array has a `stats` property: { written, skipped }.
+ * options.slots: every shift slot of the period [{ post_name, role_id, start, end }], filled or not. Empty slots are
+ * written as empty, merged blocks of the post's shift length (so picking a name in one fills the whole shift), and their
+ * boundaries count when the row height is chosen. Only slots that fit the grid exactly are used.
+ * The returned array has `stats` { written, skipped, emptySlots }, `placements` (assignments) and `slotPlacements` (empty slots).
  */
-export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDate, timeGranularityHours = null) {
+export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDate, timeGranularityHours = null, options = {}) {
   const sheetId = parseInt(sheetIdRaw);
   if (!assignments.length && !startDate) return [];
 
@@ -45,7 +48,16 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
   const end = typeof endDate === 'string' ? parseISO(endDate) : endDate;
 
   let current_time = startOfHour(start);
-  const stepMinutes = timeGranularityHours ? Math.round(timeGranularityHours * 60) : chooseStepMinutes(assignments, current_time);
+  const asDate = (v) => (typeof v === 'string' ? parseISO(v) : v);
+  // empty slots that lie completely inside the period
+  let slotsInside = (options.slots || []).filter((sl) => {
+    const s = asDate(sl.start); const e = asDate(sl.end);
+    return s.getTime() >= current_time.getTime() && e.getTime() <= end.getTime();
+  });
+  // Empty blocks are only worth it while rows stay readable: shifts that force rows shorter than 15 minutes
+  // (e.g. a post with 6-minute shifts) would make the sheet huge, so they are left out.
+  if (!timeGranularityHours && slotsInside.length && chooseStepMinutes([...assignments, ...slotsInside], current_time) < 15) slotsInside = [];
+  const stepMinutes = timeGranularityHours ? Math.round(timeGranularityHours * 60) : chooseStepMinutes([...assignments, ...slotsInside], current_time);
 
   const time_steps = [];
   let temp_time = current_time;
@@ -63,11 +75,11 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
   });
 
   // 2. Map Columns
-  const unique_posts = [...new Set(assignments.map(a => a.post_name))].sort();
+  const unique_posts = [...new Set([...assignments, ...slotsInside].map(a => a.post_name))].sort();
   const roles_per_post = {};
-  assignments.forEach(a => {
+  [...assignments, ...slotsInside].forEach(a => {
     if (!roles_per_post[a.post_name]) roles_per_post[a.post_name] = new Set();
-    roles_per_post[a.post_name].add(a.role_id);
+    roles_per_post[a.post_name].add(Number(a.role_id));
   });
 
   const post_to_cols = {};
@@ -167,6 +179,8 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
   // --- Data ---
   let written = 0;
   let skipped = 0;
+  const placements = [];
+  const occupied = {}; // column -> [[startRow, endRow)] used by assignments
   assignments.forEach(a => {
     const p_name = a.post_name;
     const r_id = Number(a.role_id);
@@ -201,8 +215,33 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
     if (end_row > start_row + 1) {
       merges.push({ sheetId, startRowIndex: start_row, endRowIndex: end_row, startColumnIndex: col, endColumnIndex: col + 1 });
     }
+    placements.push({ assignment: a, row: start_row, col });
+    (occupied[col] ||= []).push([start_row, end_row]);
     written++;
   });
+
+  // Empty slots: merged, empty, lightly shaded blocks of the post's shift length (never over an assignment).
+  const slotPlacements = [];
+  const EMPTY_FILL = { red: 0.98, green: 0.98, blue: 0.94 };
+  const rowOf = (d) => {
+    for (let i = 0; i < time_steps.length; i++) if (time_steps[i].getTime() === d.getTime()) return i;
+    return -1;
+  };
+  for (const sl of slotsInside) {
+    const col = post_to_cols[sl.post_name]?.find(pc => pc.role_id === Number(sl.role_id))?.col;
+    const s = asDate(sl.start); const e = asDate(sl.end);
+    const startIdx = rowOf(s);
+    let endIdx = rowOf(e);
+    if (endIdx === -1 && time_steps.length && addMinutes(time_steps[time_steps.length - 1], stepMinutes).getTime() === e.getTime()) endIdx = time_steps.length;
+    if (col === undefined || startIdx === -1 || endIdx === -1 || endIdx <= startIdx) continue;
+    const start_row = startIdx + 2;
+    const end_row = endIdx + 2;
+    if ((occupied[col] || []).some(([a, b]) => start_row < b && end_row > a)) continue; // an assignment is already there
+    for (let r = start_row; r < end_row; r++) set_cell(r, col, get_cell('', false, EMPTY_FILL));
+    if (end_row > start_row + 1) merges.push({ sheetId, startRowIndex: start_row, endRowIndex: end_row, startColumnIndex: col, endColumnIndex: col + 1 });
+    (occupied[col] ||= []).push([start_row, end_row]);
+    slotPlacements.push({ slot: sl, row: start_row, col });
+  }
 
   const requests = [];
   requests.push({ unmergeCells: { range: { sheetId, startRowIndex: 0, endRowIndex: 2000, startColumnIndex: 0, endColumnIndex: 200 } } });
@@ -241,76 +280,99 @@ export function buildScheduleRequests(sheetIdRaw, assignments, startDate, endDat
     }
   });
 
-  requests.stats = { written, skipped };
+  requests.stats = { written, skipped, emptySlots: slotPlacements.length };
+  requests.slotPlacements = slotPlacements;
+  requests.placements = placements; // where each assignment's cell ended up (0-based row/col)
   return requests;
 }
 
-/**
- * Builds conditional formatting rules to color cells based on soldier division.
- * References the 'Soldiers' sheet to determine division membership.
- */
-export function buildDivisionColoringRules(sheetId) {
-  const div_colors = [
-    { red: 227 / 255, green: 242 / 255, blue: 253 / 255 },  // Blue 50
-    { red: 232 / 255, green: 245 / 255, blue: 233 / 255 },  // Green 50
-    { red: 255 / 255, green: 243 / 255, blue: 224 / 255 },  // Orange 50
-    { red: 243 / 255, green: 229 / 255, blue: 245 / 255 },  // Purple 50
-    { red: 241 / 255, green: 248 / 255, blue: 233 / 255 },  // Light Green 50
-  ];
+export const DIVISION_COLORS = [
+  { red: 227 / 255, green: 242 / 255, blue: 253 / 255 },  // Blue
+  { red: 232 / 255, green: 245 / 255, blue: 233 / 255 },  // Green
+  { red: 255 / 255, green: 243 / 255, blue: 224 / 255 },  // Orange
+  { red: 243 / 255, green: 229 / 255, blue: 245 / 255 },  // Purple
+  { red: 241 / 255, green: 248 / 255, blue: 233 / 255 },  // Light green
+  { red: 224 / 255, green: 247 / 255, blue: 250 / 255 },  // Cyan
+  { red: 255 / 255, green: 249 / 255, blue: 196 / 255 },  // Yellow
+  { red: 252 / 255, green: 228 / 255, blue: 236 / 255 },  // Pink
+  { red: 239 / 255, green: 235 / 255, blue: 233 / 255 },  // Brown
+  { red: 236 / 255, green: 239 / 255, blue: 241 / 255 },  // Grey
+];
 
+const a1col = (i) => { let n = i + 1; let s = ''; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); } return s; };
+
+/**
+ * Conditional formatting for the Schedule tab:
+ *  - a fill colour per division (looked up from the Soldiers tab by name; division n uses colour ((n-1) mod 10)+1)
+ * The Soldiers tab and its Name/Division columns are located by header, so reordered columns still work.
+ * Keep `grid` close to the cells in use: a range of 1000 rows x 100 columns (100,000 cells, one lookup per cell and
+ * rule) made Google Sheets take a long time to paint the colours.
+ * `soldiers` = { title, nameCol, divisionCol } (0-based column indexes); without both columns no rules are added.
+ */
+export function buildDivisionColoringRules(sheetId, soldiers = { title: 'Soldiers', nameCol: 0, divisionCol: 1 }, grid = { rowCount: 1000, columnCount: 100 }, origin = { row: 2, col: 2 }) {
   const requests = [];
+  const range = { sheetId, startRowIndex: origin.row, endRowIndex: Math.max(grid.rowCount || 1000, origin.row + 1), startColumnIndex: origin.col, endColumnIndex: Math.max(grid.columnCount || 100, origin.col + 1) };
+  const anchor = `${a1col(origin.col)}${origin.row + 1}`; // the range's top-left cell: the formulas are relative to it
 
-  // Add a rule for each color/division index
-  div_colors.forEach((color, i) => {
-    requests.push({
-      addConditionalFormatRule: {
-        rule: {
-          ranges: [{
-            sheetId: sheetId,
-            startRowIndex: 2,
-            endRowIndex: 1000,
-            startColumnIndex: 2,
-            endColumnIndex: 100
-          }],
-          booleanRule: {
-            condition: {
-              type: 'CUSTOM_FORMULA',
-              values: [{
-                // Formula: lookup the soldier in the 'Soldiers' sheet and check if their division matches the color index
-                // C3 is the top-left cell of the range (startRowIndex: 2, startColumnIndex: 2)
-                userEnteredValue: `=AND(LEN(C3)>0, IFERROR(VLOOKUP(C3, INDIRECT("'Soldiers'!$A$2:$B$1000"), 2, FALSE), -1) = ${i + 1})`
-              }]
+  if (soldiers && soldiers.nameCol !== undefined && soldiers.divisionCol !== undefined) {
+    const q = String(soldiers.title).replace(/'/g, "''");
+    const rng = (c) => `INDIRECT("'${q}'!$${a1col(c)}$2:$${a1col(c)}")`;
+    const division = `IFERROR(VALUE(INDEX(${rng(soldiers.divisionCol)},MATCH(${anchor},${rng(soldiers.nameCol)},0))),0)`;
+    DIVISION_COLORS.forEach((color, i) => {
+      requests.push({
+        addConditionalFormatRule: {
+          rule: {
+            ranges: [range],
+            booleanRule: {
+              condition: { type: 'CUSTOM_FORMULA', values: [{ userEnteredValue: `=AND(LEN(${anchor})>0,${division}>0,MOD(${division}-1,${DIVISION_COLORS.length})+1=${i + 1})` }] },
+              format: { backgroundColor: color },
             },
-            format: {
-              backgroundColor: color
-            }
-          }
+          },
+          index: i,
         },
-        index: i
-      }
+      });
     });
-  });
+  }
 
   return requests;
 }
 
 /**
- * Port of parse_grid
+ * Mark cells whose assignment breaks a rule: bold dark-red text plus a note explaining why.
+ * (Text colour and notes are used because conditional fills, e.g. division colours, would hide a static fill.)
+ * Always starts by clearing earlier marks in the data area. marks = [{ row, col, notes: [string] }]
  */
-export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHours = 1) {
-  if (!gridRows || gridRows.length < 3) return [];
+export function buildViolationMarkRequests(sheetId, marks, grid = { rowCount: 1000, columnCount: 100 }) {
+  const requests = [{
+    repeatCell: {
+      range: { sheetId, startRowIndex: 2, endRowIndex: Math.max(grid.rowCount || 1000, 3), startColumnIndex: 2, endColumnIndex: Math.max(grid.columnCount || 100, 3) },
+      cell: { userEnteredFormat: { textFormat: { bold: false, foregroundColor: {} } }, note: '' },
+      fields: 'note,userEnteredFormat.textFormat',
+    },
+  }];
+  for (const m of marks) {
+    requests.push({
+      updateCells: {
+        range: { sheetId, startRowIndex: m.row, endRowIndex: m.row + 1, startColumnIndex: m.col, endColumnIndex: m.col + 1 },
+        rows: [{ values: [{ note: `Problem${m.notes.length > 1 ? 's' : ''}:\n- ${m.notes.join('\n- ')}`, userEnteredFormat: { textFormat: { bold: true, foregroundColor: { red: 0.72, green: 0.05, blue: 0.05 } } } }] }],
+        fields: 'note,userEnteredFormat.textFormat',
+      },
+    });
+  }
+  return requests;
+}
 
-  const mergeMap = {};
-  merges.forEach(m => {
-    mergeMap[`${m.startRowIndex}-${m.startColumnIndex}`] = m.endRowIndex;
-  });
-
+/**
+ * Which post and role each column of the Schedule tab belongs to.
+ * Row 1 holds the post name (merged over its roles), row 2 the role labels. Google trims trailing blank
+ * cells per row, so the header row can be shorter than the data: the width comes from the longest row.
+ * Returns { colIndex: { name, role_id } }.
+ */
+export function mapScheduleColumns(gridRows) {
   const val = (r, c) => gridRows[r]?.[c]?.toString().trim() || "";
-
   const colToPost = {};
-  let c = 2;
-  // Google trims trailing blank cells per row, so the header row can be shorter than the data.
   const width = Math.max(0, ...gridRows.map((row) => (row ? row.length : 0)));
+  let c = 2;
   while (c < width) {
     const pName = val(0, c);
     if (pName) {
@@ -327,7 +389,14 @@ export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHou
       c++;
     }
   }
+  return colToPost;
+}
 
+/**
+ * Port of parse_grid
+ */
+export function scheduleRowTimes(gridRows, timeGranularityHours = 1) {
+  const val = (r, c) => gridRows[r]?.[c]?.toString().trim() || "";
   const rowToDt = {};
   const rowStep = {}; // minutes per row, from the Time column label
   const stepOf = (r) => (rowStep[r] ?? timeGranularityHours * 60);
@@ -353,6 +422,22 @@ export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHou
       }
     }
   }
+  return { rowToDt, rowStep, stepOf };
+}
+
+/** Port of parse_grid */
+export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHours = 1) {
+  if (!gridRows || gridRows.length < 3) return [];
+
+  const mergeMap = {};
+  merges.forEach(m => {
+    mergeMap[`${m.startRowIndex}-${m.startColumnIndex}`] = m.endRowIndex;
+  });
+
+  const val = (r, c) => gridRows[r]?.[c]?.toString().trim() || "";
+
+  const colToPost = mapScheduleColumns(gridRows);
+  const { rowToDt, stepOf } = scheduleRowTimes(gridRows, timeGranularityHours);
 
   const assignments = [];
   for (const [col, postInfo] of Object.entries(colToPost)) {
@@ -375,8 +460,16 @@ export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHou
           }
           currR = endRow;
         } else {
-          currR = r + 1;
-          endDt = addMinutes(rowToDt[r], stepOf(r));
+          // Not merged (typed by hand): the shift lasts as long as its post's shift length, but never runs into
+          // the next filled cell of the same column or past the last row.
+          let span = 1;
+          const post = (activePosts || []).find((p) => String(p.name).trim().toLowerCase() === postInfo.name.toLowerCase());
+          if (post && post.shift_length_hours > 0) {
+            const want = Math.max(1, Math.round((post.shift_length_hours * 60) / stepOf(r)));
+            while (span < want && r + span < gridRows.length && !val(r + span, cIdx) && rowToDt[r + span]) span++;
+          }
+          currR = r + span;
+          endDt = addMinutes(rowToDt[r], span * stepOf(r));
         }
 
         assignments.push({
@@ -384,7 +477,9 @@ export function parseGrid(gridRows, activePosts, merges = [], timeGranularityHou
           start: startDt,
           end: endDt,
           role_id: postInfo.role_id,
-          soldier_name: soldierName
+          soldier_name: soldierName,
+          row: r, // 0-based sheet position of the (top-left) cell, so problems can be marked in the sheet
+          col: cIdx
         });
         r = currR;
       } else {

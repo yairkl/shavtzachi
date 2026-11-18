@@ -26,6 +26,26 @@ npm test         # unit tests (Vitest)
 npm run build    # production build
 ```
 
+### Editing the spreadsheet by hand
+
+The Soldiers, Posts and Unavailabilities tabs are meant to be edited directly in Google Sheets. New spreadsheets (and newly created tabs) are formatted automatically; for an existing one use **Settings -> Spreadsheet health -> Format sheets for editing**. It adds a styled, frozen header with explanatory notes, dropdowns (TRUE/FALSE, soldier names), input checks that warn but never block, `yyyy-mm-dd hh:mm` / `hh:mm` formats (so dates read back unambiguously in any locale), and red/amber highlighting of cells the app cannot read (duplicate names, bad times, end before start, unknown soldiers...). Cell contents are never changed, and running it again refreshes only the app's own highlight rules.
+
+### Schedule rules in the sheet
+
+The Schedule tab is coloured by division (10 colours, looked up from the Soldiers tab by header, so reordered columns work). Mistakes made while editing it by hand are caught on demand and on every save:
+
+- *Settings -> Spreadsheet health -> Check schedule* (and every Save in the Scheduler) checks all saved assignments for double booking, cooldown, missing skills, excluded posts, unavailability and people missing from the roster. Problem cells get bold red text and a note explaining why. These marks refresh only when you save or check again.
+
+Cooldown means the rest needed after finishing a shift of a post: the gap before the next shift must be at least the cooldown of the earlier shift's post. Both shifts of the pair are flagged.
+
+### Assigning by hand
+
+Every save builds the whole saved day as a grid of **merged shift blocks, filled or empty**: each post role has its own column and every shift slot is merged to the post's shift length, so picking a name in an empty slot fills the whole shift with no manual merging. Empty slots are lightly shaded so unfilled ones stand out.
+
+### Updating an existing spreadsheet
+
+Open **Settings -> Spreadsheet health -> Update whole spreadsheet** (after a confirmation). In one step it adds any missing tabs and columns, formats the Soldiers, Posts and Unavailabilities tabs for editing, and rebuilds the Schedule tab with the division colours and the soldier dropdown. It never changes your data: every row and every saved assignment is written back exactly as it was, your own dropdown / formatting rules / named ranges are kept, and it can be run as often as you like. The same things also happen automatically whenever you save a schedule.
+
 ### Tests
 
 - `npm test` - unit tests, including an in-memory fake of the Google Sheets API (`src/tests/helpers/fakeSheets.js`) used to test hand-edited and imported spreadsheets end to end.

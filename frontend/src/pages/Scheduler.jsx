@@ -5,6 +5,7 @@ import { notify } from '@/lib/notify';
 import { describeError } from '@/lib/errors';
 import { DiagnosticsBanner } from '@/components/SheetHealth';
 import { diagnoseInputs, summarizeUnfilled } from '@/lib/schedulerCore';
+import { validateAssignments, buildWarningMap } from '@/lib/scheduleValidation';
 import { Save, RefreshCw, ChevronLeft, ChevronRight, User, Users, LayoutGrid, CheckCircle2, GripVertical, Wand2, X, PanelRightClose, PanelRight, AlertTriangle, ShieldAlert, Filter, Ban, CalendarX, Clock4, ShieldCheck, FileSpreadsheet } from 'lucide-react';
 import { addDays, addHours, format, startOfToday, startOfDay, parseISO, isBefore, differenceInMinutes } from 'date-fns';
 import { cn } from "@/lib/utils";
@@ -66,149 +67,6 @@ const ConflictTooltip = ({ icon: Icon, color, message, warnings }) => {
     </Popover>
   );
 };
-
-// ---------------------------------------------------------------------------
-// Constraint validation engine
-// ---------------------------------------------------------------------------
-
-function validateAssignments(shifts, posts, soldiers, unavailabilities = []) {
-  if (!Array.isArray(shifts)) {
-    console.error("validateAssignments error: 'shifts' is not an array", shifts);
-    return [];
-  }
-  const warnings = []; // { slotIndex, type, message }
-
-  // Build lookups
-  const soldierMap = {};
-  for (const s of soldiers) {
-    soldierMap[s.id] = s;
-  }
-  const postMap = {};
-  for (const p of posts) {
-    postMap[p.name] = p;
-  }
-
-  // Gather assigned slots grouped by soldier
-  const bySoldier = {}; // soldier_id -> [{ idx, slot }]
-  shifts.forEach((slot, idx) => {
-    if (slot.soldier_id != null) {
-      if (!bySoldier[slot.soldier_id]) bySoldier[slot.soldier_id] = [];
-      bySoldier[slot.soldier_id].push({ idx, slot });
-    }
-  });
-
-  shifts.forEach((slot, idx) => {
-    if (slot.soldier_id == null) return;
-
-    const soldier = soldierMap[slot.soldier_id];
-    const post = postMap[slot.post_name];
-    const requiredSkill = slot.skill;
-
-    const slotStart = new Date(slot.start);
-    const slotEnd = new Date(slot.end);
-
-    // 0. Unavailability check
-    if (soldier) {
-      for (const u of unavailabilities) {
-        if (u.soldier_id === soldier.id) {
-          const uStart = new Date(u.start_datetime);
-          const uEnd = new Date(u.end_datetime);
-          if (slotStart < uEnd && uStart < slotEnd) {
-            warnings.push({
-              slotIndex: idx,
-              type: 'unavailability',
-              message: `${soldier.name} is unavailable: ${u.reason || 'No specific reason given'}`,
-            });
-          }
-        }
-      }
-    }
-
-    // 1. Skill mismatch
-    if (soldier && requiredSkill) {
-      const hasSkill = soldier.skills && soldier.skills.includes(requiredSkill);
-      if (!hasSkill) {
-        warnings.push({
-          slotIndex: idx,
-          type: 'skill',
-          message: `${soldier.name} lacks required skill "${requiredSkill}"`,
-        });
-      }
-    }
-
-    // 2. Overlapping shifts & 3. Cooldown violation (check against same soldier's other shifts)
-    if (soldier && bySoldier[slot.soldier_id]) {
-      const cooldownHours = post ? post.cooldown_hours : 0;
-
-      for (const other of bySoldier[slot.soldier_id]) {
-        if (other.idx === idx) continue;
-        const otherStart = new Date(other.slot.start);
-        const otherEnd = new Date(other.slot.end);
-        const otherPost = postMap[other.slot.post_name];
-        const otherCooldownHours = otherPost ? otherPost.cooldown_hours : 0;
-
-        // Overlap check
-        if (slotStart < otherEnd && otherStart < slotEnd) {
-          // Only add once per pair (smaller index reports)
-          if (idx < other.idx) {
-            warnings.push({
-              slotIndex: idx,
-              type: 'overlap',
-              message: `${soldier.name} is double-booked (overlaps with ${other.slot.post_name} ${format(otherStart, 'HH:mm')}-${format(otherEnd, 'HH:mm')})`,
-            });
-            warnings.push({
-              slotIndex: other.idx,
-              type: 'overlap',
-              message: `${soldier.name} is double-booked (overlaps with ${slot.post_name} ${format(slotStart, 'HH:mm')}-${format(slotEnd, 'HH:mm')})`,
-            });
-          }
-          continue; // Skip cooldown check if already overlapping
-        }
-
-        // Cooldown check: the gap between consecutive shifts must respect both posts' cooldowns
-        const gap = (otherStart - slotEnd) / (1000 * 60 * 60); // hours
-        const reverseGap = (slotStart - otherEnd) / (1000 * 60 * 60);
-
-        if (gap >= 0 && gap < cooldownHours && idx < other.idx) {
-          warnings.push({
-            slotIndex: idx,
-            type: 'cooldown',
-            message: `Only ${gap.toFixed(1)}h rest before ${other.slot.post_name} (needs ${cooldownHours}h cooldown)`,
-          });
-          warnings.push({
-            slotIndex: other.idx,
-            type: 'cooldown',
-            message: `Only ${gap.toFixed(1)}h rest after ${slot.post_name} (needs ${cooldownHours}h cooldown)`,
-          });
-        }
-        if (reverseGap >= 0 && reverseGap < otherCooldownHours && idx < other.idx) {
-          warnings.push({
-            slotIndex: other.idx,
-            type: 'cooldown',
-            message: `Only ${reverseGap.toFixed(1)}h rest before ${slot.post_name} (needs ${otherCooldownHours}h cooldown)`,
-          });
-          warnings.push({
-            slotIndex: idx,
-            type: 'cooldown',
-            message: `Only ${reverseGap.toFixed(1)}h rest after ${other.slot.post_name} (needs ${otherCooldownHours}h cooldown)`,
-          });
-        }
-      }
-    }
-  });
-
-  return warnings;
-}
-
-// Build a per-slot warning lookup: slotIndex -> warnings[]
-function buildWarningMap(warnings) {
-  const map = {};
-  for (const w of warnings) {
-    if (!map[w.slotIndex]) map[w.slotIndex] = [];
-    map[w.slotIndex].push(w);
-  }
-  return map;
-}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -429,10 +287,14 @@ export default function Scheduler() {
         role_id: s.role_id
       }));
 
-      await saveSchedule(start, endStr, payload);
+      const { data: saved } = await saveSchedule(start, endStr, payload);
       setShifts(prev => prev.map(s => ({ ...s, persisted: s.soldier_id != null })));
       setIsDraft(false);
-      notify.success(`Saved ${payload.length} assignment(s) to the spreadsheet.`);
+      if (saved.violations.length) {
+        notify.info(`Saved ${payload.length} assignment(s). ${saved.violations.length} rule problem(s) were marked in the sheet with red text and a note.`);
+      } else {
+        notify.success(`Saved ${payload.length} assignment(s) to the spreadsheet.`);
+      }
     } catch (error) {
       console.error("Error saving:", error);
       notify.error(describeError(error, 'Could not save the schedule. Nothing was changed in the spreadsheet.'));

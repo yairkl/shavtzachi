@@ -114,6 +114,23 @@ test('signed-out visitors see the login page, not a broken app', async () => {
   await s.context.close();
 });
 
+test('Settings can format the sheets for editing, without touching the data', async () => {
+  const s = await app.open(messySheet());
+  await s.go('/settings');
+  await s.page.getByText(/not set up for editing by hand/).waitFor();
+  const dataRows = () => JSON.stringify(s.fake.rows('Soldiers').slice(1));
+  const before = dataRows();
+  await s.page.getByRole('button', { name: /Format sheets for editing/ }).click();
+  await s.page.getByRole('alertdialog').getByRole('button', { name: 'Format' }).click();
+  await s.toast(/Formatted \d+ tab/);
+  assert.equal(dataRows(), before, 'data rows are unchanged (only missing header cells may be added)');
+  assert.ok(s.fake.tab('Soldiers').validations.length > 0);
+  await s.page.getByText('No problems found.').waitFor({ timeout: 8000 }).catch(() => {});
+  await s.page.getByText(/not set up for editing by hand/).waitFor({ state: 'detached' });
+  assert.deepEqual(s.problems, []);
+  await s.context.close();
+});
+
 test('Excel export of a saved schedule downloads a real file, and the soldiers CSV round-trips', async () => {
   const XLSX = (await import('xlsx')).default;
   const { readFileSync } = await import('node:fs');
@@ -138,6 +155,81 @@ test('Excel export of a saved schedule downloads a real file, and the soldiers C
   const text = readFileSync(await csv.path(), 'utf8');
   assert.match(text, /Name,Division,Skills,Excluded Posts/);
   assert.match(text, /Eli,2,"Guard, medic"|Eli,2,"guard, medic"/i);
+  assert.deepEqual(s.problems, []);
+  await s.context.close();
+});
+
+test('Check schedule finds double booking and cooldown problems typed straight into the sheet, and marks them', async () => {
+  const s = await app.open({
+    Soldiers: [HEAD.Soldiers, ['Dan', '1', 'guard', ''], ['Eli', '2', 'guard', '']],
+    Posts: [HEAD.Posts,
+      ['Gate', '4', '00:00', '00:00', '8', '1', 'guard', 'TRUE', '', ''],
+      ['Tower', '4', '00:00', '00:00', '0', '1', 'guard', 'TRUE', '', ''],
+    ],
+    Unavailabilities: [HEAD.Unavailabilities],
+    Schedule: [
+      ['Date', 'Time', 'Gate', 'Tower'],
+      ['', '', '', ''],
+      ['10/03/2025', '06:00 - 10:00', 'Dan', 'Dan'], // double booked
+      ['', '10:00 - 14:00', 'Eli', ''],
+      ['', '14:00 - 18:00', '', 'Eli'], // only 4h after Gate, which needs 8h
+    ],
+  });
+  await s.go('/settings');
+  await s.page.getByText(/Found 2 soldier/).waitFor();
+  await s.page.getByRole('button', { name: /Check schedule/ }).click();
+  await s.page.getByText(/Dan is double-booked/).first().waitFor();
+  await s.page.getByText(/rest (before|after)/).first().waitFor();
+  const problemNotes = () => Object.entries(s.fake.tab('Schedule').notes || {}).filter(([, t]) => /^Problem/.test(t)).map(([k]) => k).sort();
+  const marked = problemNotes();
+  assert.deepEqual(marked, ['2,2', '2,3', '3,2', '4,3']);
+  // fix the sheet by hand, re-check: everything is clean and the marks are gone
+  s.fake.tab('Schedule').values[2][3] = '';
+  s.fake.tab('Schedule').values[3][2] = '';
+  await s.page.getByRole('button', { name: /Check schedule/ }).click();
+  await s.page.getByText(/no problems/i).first().waitFor();
+  assert.deepEqual(problemNotes(), []);
+  assert.deepEqual(s.problems, []);
+  await s.context.close();
+});
+
+test('saving from the app gives the Schedule tab a soldier dropdown over the whole schedule', async () => {
+  const s = await app.open(messySheet());
+  await s.go('/scheduler');
+  await s.page.getByRole('button', { name: /Auto Assign/ }).click();
+  await s.toast(/Assigned all/);
+  await s.page.getByRole('button', { name: /Save/ }).first().click();
+  await s.toast(/Saved \d+ assignment/);
+  const rules = s.fake.tab('Schedule').validations || [];
+  const plain = rules.filter((r) => r.rule.condition.type === 'ONE_OF_RANGE');
+  assert.ok(plain.length >= 1, 'a plain soldier list over the whole schedule');
+  assert.match(plain[0].rule.condition.values[0].userEnteredValue, /^='Soldiers'!\$A\$2:\$A$/);
+  assert.ok(plain[0].range.endRowIndex >= s.fake.rows('Schedule').length, 'covers every row of the schedule');
+  assert.deepEqual(s.problems, []);
+  await s.context.close();
+});
+
+test('"Update whole spreadsheet" brings an old sheet up to date without changing its data', async () => {
+  const s = await app.open({
+    Soldiers: [HEAD.Soldiers, ['Dan', '1', 'guard', ''], ['Eli', '2', 'guard', '']],
+    Posts: [HEAD.Posts, ['Gate', '4', '06:00', '05:59', '8', '1', 'guard,guard', '1', '', '']],
+    Unavailabilities: [HEAD.Unavailabilities],
+    Schedule: [
+      ['Date', 'Time', 'Gate', ''],
+      ['', '', 'Role 1', 'Role 2'],
+      ['10/03/2025', '06:00 - 10:00', 'Dan', 'Eli'],
+      ['', '10:00 - 14:00', 'Eli', 'Dan'],
+    ],
+  });
+  await s.go('/settings');
+  await s.page.getByText(/Found 2 soldier/).waitFor();
+  const dataBefore = JSON.stringify(s.fake.rows('Soldiers').slice(1)) + JSON.stringify(s.fake.rows('Posts').slice(1));
+  await s.page.getByRole('button', { name: /Update whole spreadsheet/ }).click();
+  await s.page.getByRole('alertdialog').getByRole('button', { name: 'Update' }).click();
+  await s.toast(/Spreadsheet updated|schedule problem/);
+  assert.equal(JSON.stringify(s.fake.rows('Soldiers').slice(1)) + JSON.stringify(s.fake.rows('Posts').slice(1)), dataBefore, 'data rows untouched');
+  assert.ok(s.fake.tab('Schedule').validations.length > 0, 'soldier dropdown on the schedule');
+  assert.ok(s.fake.tab('Soldiers').validations.length > 0, 'data tabs formatted');
   assert.deepEqual(s.problems, []);
   await s.context.close();
 });
