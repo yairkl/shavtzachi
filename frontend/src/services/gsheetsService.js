@@ -6,6 +6,7 @@ import { parseGrid, buildScheduleRequests, buildDivisionColoringRules, buildViol
 import { isOurDropdown, rankForSlot, suggestionNote, listRule, workload, MAX_LIST_BLOCKS } from './assignmentLists';
 import { validateAssignments } from '../lib/scheduleValidation';
 import { generateShifts } from '../lib/schedulerCore';
+import { DAY_TAB, OUT_FIRST_ROW, planDayView, buildDayViewCells, dayViewSize, daysColumn, layerRows, dayKey, dayRanges, dayName, MAX_JUMP_DAYS } from './dayView';
 import { CHECK_TAB, planLiveChecks, buildLiveCheckCells, buildLiveCheckRules, isLiveCheckRule, estimateSize, MAX_FORMULA_CHARS } from './liveChecks';
 import { TABS, COLUMN_SPECS, buildModel, mapColumns, composeRow, colLetter, normalizeKey, toSheetDateTime } from '../lib/sheetModel';
 import { parseISO, differenceInSeconds, isBefore, isAfter, addMinutes } from 'date-fns';
@@ -774,8 +775,137 @@ export class GSheetsService {
       console.warn('Could not update the live schedule checks', e);
       return { ok: false, reason: 'error' };
     });
+    // the Day View is thousands of formulas: keep it up to date only for people who use it (it is built by "Day in Sheets")
+    await this.refreshDayView({ onlyIfBuilt: true }).catch((e) => console.warn('Could not update the Day View', e));
+    await this.refreshDayShortcuts().catch((e) => console.warn('Could not update the day shortcuts', e)); // cheap: Name Box shortcuts, no formulas
     await this.refreshAssignmentLists().catch((e) => console.warn('Could not update the assignment dropdowns', e));
     return { violations, liveChecks: live };
+  }
+
+  /**
+   * (Re)build the "Day View" tab: a day dropdown (B1) and a table of that day of the Schedule tab, all formulas,
+   * so picking another day in the sheet updates it instantly. Keeps the day currently selected when it still exists.
+   * Pass `day` ("yyyy-mm-dd") to select a day. Returns { ok, sheetId?, selected?, reason? }.
+   */
+  async refreshDayView({ day, onlyIfBuilt = false } = {}) {
+    this.clearCache();
+    const cache = await this.fetchAllData();
+    const scheduleTitle = cache.tabs.Schedule;
+    if (!scheduleTitle) return { ok: false, reason: 'no-schedule' };
+    if (onlyIfBuilt && !cache.metadata.some((m) => m.properties.title === DAY_TAB)) return { ok: false, reason: 'not-built' };
+    const plan = planDayView(cache.raw.Schedule, cache.model.posts);
+    const existing = cache.metadata.find((m) => m.properties.title === DAY_TAB);
+    if (!plan) return { ok: false, reason: 'empty-schedule', sheetId: existing?.properties.sheetId };
+
+    // which day is selected?
+    let selected = day && plan.dayList.includes(day) ? day : null;
+    if (!selected && existing) {
+      const current = await this.fetchSheetValues(`${quoteTab(DAY_TAB)}!B1`).catch(() => []);
+      const value = String(current?.[0]?.[0] ?? '').trim();
+      if (plan.dayList.includes(value)) selected = value;
+    }
+    if (!selected) {
+      const today = dayKey(new Date());
+      selected = plan.dayList.includes(today) ? today : plan.dayList[plan.dayList.length - 1];
+    }
+
+    const scheduleMeta = cache.metadata.find((m) => m.properties.title === scheduleTitle);
+    const scheduleGid = scheduleMeta.properties.sheetId;
+    const jumpDays = dayRanges(cache.raw.Schedule);
+    const cells = buildDayViewCells(plan, scheduleTitle, selected, scheduleGid, jumpDays);
+    if (dayViewSize(cells) > 5_000_000) return { ok: false, reason: 'too-large' };
+
+    const soldiers = this._soldiersRef(cache.model, cache.tabs);
+    const width = Math.max(...plan.columns.map((c) => c.index)) + 1;
+    const dcol = daysColumn(plan);
+    const L = layerRows(plan);
+    const height = cells.length;
+    const rowCount = height + 5;
+    const columnCount = dcol + 3;
+
+    const requests = [];
+    let sheetId = existing?.properties.sheetId;
+    if (!existing) {
+      sheetId = Math.max(0, ...cache.metadata.map((m) => m.properties.sheetId)) + 2000;
+      requests.push({ addSheet: { properties: { sheetId, title: DAY_TAB, tabColorStyle: { rgbColor: { red: 0.25, green: 0.32, blue: 0.71 } }, gridProperties: { rowCount, columnCount } } } });
+    } else {
+      const gp = existing.properties.gridProperties || {};
+      (existing.conditionalFormats || []).map((_, i) => i).reverse().forEach((index) => requests.push({ deleteConditionalFormatRule: { sheetId, index } }));
+      if ((gp.rowCount || 0) < rowCount || (gp.columnCount || 0) < columnCount) {
+        requests.push({ updateSheetProperties: { properties: { sheetId, gridProperties: { rowCount: Math.max(rowCount, gp.rowCount || 0), columnCount: Math.max(columnCount, gp.columnCount || 0) } }, fields: 'gridProperties(rowCount,columnCount)' } });
+      }
+      requests.push({ repeatCell: { range: { sheetId }, cell: {}, fields: 'userEnteredValue,userEnteredFormat' } });
+      requests.push({ updateDimensionProperties: { range: { sheetId, dimension: 'ROWS', startIndex: 0, endIndex: Math.max(rowCount, gp.rowCount || 0) }, properties: { hiddenByUser: false }, fields: 'hiddenByUser' } });
+    }
+
+    const toCell = (v) => (v === '' ? {} : v.startsWith('=') ? { userEnteredValue: { formulaValue: v } } : { userEnteredValue: { stringValue: v } });
+    requests.push({
+      updateCells: {
+        range: { sheetId, startRowIndex: 0, startColumnIndex: 0 },
+        rows: cells.map((row) => {
+          let end = row.length;
+          while (end > 0 && row[end - 1] === '') end -= 1;
+          return { values: row.slice(0, end).map(toCell) };
+        }),
+        fields: 'userEnteredValue',
+      },
+    });
+
+    const white = { red: 1, green: 1, blue: 1 };
+    const indigo = { red: 63 / 255, green: 81 / 255, blue: 181 / 255 };
+    requests.push(
+      // header rows and the selector
+      { repeatCell: { range: { sheetId, startRowIndex: 2, endRowIndex: 4, startColumnIndex: 0, endColumnIndex: width }, cell: { userEnteredFormat: { backgroundColor: indigo, textFormat: { bold: true, foregroundColor: white }, horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)' } },
+      { repeatCell: { range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 1 }, cell: { userEnteredFormat: { textFormat: { bold: true, fontSize: 12 } } }, fields: 'userEnteredFormat.textFormat' } },
+      { repeatCell: { range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 1, endColumnIndex: 2 }, cell: { userEnteredFormat: { backgroundColor: { red: 1, green: 0.95, blue: 0.7 }, textFormat: { bold: true, fontSize: 12 }, horizontalAlignment: 'CENTER', numberFormat: { type: 'DATE', pattern: 'yyyy-mm-dd' } } }, fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,numberFormat)' } },
+      { repeatCell: { range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 2, endColumnIndex: 8 }, cell: { userEnteredFormat: { textFormat: { foregroundColor: { red: 0.6, green: 0.6, blue: 0.6 }, fontSize: 8 } } }, fields: 'userEnteredFormat.textFormat' } },
+      { repeatCell: { range: { sheetId, startRowIndex: OUT_FIRST_ROW - 1, endRowIndex: OUT_FIRST_ROW - 1 + plan.outRows, startColumnIndex: 0, endColumnIndex: width }, cell: { userEnteredFormat: { horizontalAlignment: 'CENTER' } }, fields: 'userEnteredFormat.horizontalAlignment' } },
+      { updateSheetProperties: { properties: { sheetId, gridProperties: { frozenRowCount: 4, frozenColumnCount: 2 } }, fields: 'gridProperties(frozenRowCount,frozenColumnCount)' } },
+      { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 2 }, properties: { pixelSize: 120 }, fields: 'pixelSize' } },
+      { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: 2, endIndex: width }, properties: { pixelSize: 130 }, fields: 'pixelSize' } },
+      // the dropdown of days
+      { setDataValidation: { range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 1, endColumnIndex: 2 }, rule: { condition: { type: 'ONE_OF_RANGE', values: [{ userEnteredValue: `=$${colLetter(dcol)}$4:$${colLetter(dcol)}$400` }] }, inputMessage: 'Pick a day', strict: false, showCustomUi: true } } },
+      // the helper layers are hidden
+      { updateDimensionProperties: { range: { sheetId, dimension: 'ROWS', startIndex: L.key(plan.first) - 2, endIndex: height }, properties: { hiddenByUser: true }, fields: 'hiddenByUser' } },
+      ...buildDivisionColoringRules(sheetId, soldiers, { rowCount: OUT_FIRST_ROW - 1 + plan.outRows, columnCount: width }, { row: OUT_FIRST_ROW - 1, col: 2 }),
+      // the day list's links need room
+      { updateDimensionProperties: { range: { sheetId, dimension: 'COLUMNS', startIndex: dcol + 2, endIndex: dcol + 3 }, properties: { pixelSize: 140 }, fields: 'pixelSize' } },
+    );
+
+    // In the Schedule tab: a "jump" link in the frozen header corner, and a Name Box shortcut per day (Day_2025_03_10)
+    requests.push({
+      updateCells: {
+        range: { sheetId: scheduleGid, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 1 },
+        rows: [{ values: [{ userEnteredValue: { formulaValue: `=HYPERLINK("#gid=${sheetId}&range=${colLetter(dcol + 2)}3","Date ▸ jump to a day")` } }] }],
+        fields: 'userEnteredValue',
+      },
+    });
+    (cache.namedRanges || []).filter((n) => /^Day_/.test(n.name)).forEach((n) => requests.push({ deleteNamedRange: { namedRangeId: n.namedRangeId } }));
+    jumpDays.slice(-MAX_JUMP_DAYS).forEach((d) => requests.push({
+      addNamedRange: { namedRange: { name: dayName(d.day), range: { sheetId: scheduleGid, startRowIndex: d.startRow - 1, endRowIndex: d.endRow, startColumnIndex: 0, endColumnIndex: width } } },
+    }));
+
+    await this.batchUpdate(requests);
+    this.clearCache();
+    return { ok: true, sheetId, selected };
+  }
+
+  /**
+   * The address of the Day View tab, set to `day` ("yyyy-mm-dd") when given. Builds the tab first if it does not exist.
+   * Returns { url, sheetId, selected } or throws a readable error.
+   */
+  async openDayView(day) {
+    let res = await this.refreshDayView({ day });
+    if (!res.ok) {
+      if (res.reason === 'no-schedule' || res.reason === 'empty-schedule') throw new Error('There is no saved schedule yet. Save a schedule first, then open the Day View.');
+      if (res.reason === 'too-large') throw new Error('This schedule is too long for the Day View.');
+      throw new Error('Could not build the Day View.');
+    }
+    if (day && res.selected !== day) {
+      // the requested day is not in the schedule: show the one that is selected
+      res = { ...res, missing: true };
+    }
+    return { url: `https://docs.google.com/spreadsheets/d/${this.spreadsheetId}/edit#gid=${res.sheetId}`, sheetId: res.sheetId, selected: res.selected, missing: !!res.missing };
   }
 
   /**
@@ -865,7 +995,7 @@ export class GSheetsService {
 
   /**
    * Bring an existing spreadsheet fully up to date in one go: missing tabs/columns, formatting and validation of the data
-   * tabs, and the Schedule tab's colours, soldier dropdown, live checks, per-slot dropdowns and problem marks.
+   * tabs, and the Schedule tab's colours, soldier dropdown, live checks, Day View, jump links and problem marks.
    * No cell content is changed: the saved assignments are read and written back exactly as they are.
    * Returns { steps: string[], assignments, violations }.
    */
@@ -886,9 +1016,41 @@ export class GSheetsService {
     await this.saveAssignments('1970-01-01T00:00:00', '1970-01-02T00:00:00', [], { rewriteOnly: true });
     steps.push(`Rebuilt the Schedule tab with colours and the soldier dropdown (${existing.length} assignments kept)`);
     const check = await this.checkSchedule({ mark: true });
-    steps.push('Updated the live checks');
+    steps.push('Updated the live checks, the Day View and the jump links');
     steps.push(check.violations.length ? `${check.violations.length} schedule problem(s) marked in red` : 'No schedule problems found');
     return { steps, assignments: existing.length, violations: check.violations.length };
+  }
+
+  /**
+   * The address of a day inside the Schedule tab (its first row), for editing it there.
+   * Returns { url, row, sheetId } or throws a readable error when the day is not in the saved schedule.
+   */
+  async refreshDayShortcuts() {
+    this.clearCache();
+    const cache = await this.fetchAllData();
+    const title = cache.tabs.Schedule;
+    const sheet = title ? cache.metadata.find((m) => m.properties.title === title) : null;
+    if (!sheet) return { ok: false, reason: 'no-schedule' };
+    const grid = cache.raw.Schedule;
+    const width = Math.max(1, ...grid.map((r) => r.length));
+    const requests = (cache.namedRanges || []).filter((n) => /^Day_/.test(n.name)).map((n) => ({ deleteNamedRange: { namedRangeId: n.namedRangeId } }));
+    dayRanges(grid).slice(-MAX_JUMP_DAYS).forEach((d) => requests.push({
+      addNamedRange: { namedRange: { name: dayName(d.day), range: { sheetId: sheet.properties.sheetId, startRowIndex: d.startRow - 1, endRowIndex: d.endRow, startColumnIndex: 0, endColumnIndex: width } } },
+    }));
+    if (requests.length) await this.batchUpdate(requests);
+    this.clearCache();
+    return { ok: true };
+  }
+
+  async scheduleDayUrl(day) {
+    this.clearCache();
+    const cache = await this.fetchAllData();
+    const title = cache.tabs.Schedule;
+    const sheet = title ? cache.metadata.find((m) => m.properties.title === title) : null;
+    if (!sheet) throw new Error('There is no saved schedule yet. Save a schedule first.');
+    const found = dayRanges(cache.raw.Schedule).find((d) => d.day === day);
+    if (!found) throw new Error(`${day} is not in the saved schedule. Save that day first.`);
+    return { url: `https://docs.google.com/spreadsheets/d/${this.spreadsheetId}/edit#gid=${sheet.properties.sheetId}&range=A${found.startRow}`, row: found.startRow, sheetId: sheet.properties.sheetId };
   }
 
   /**
@@ -1017,7 +1179,7 @@ export class GSheetsService {
       live = await this.refreshLiveChecks().catch((e) => {
         console.warn('Could not update the live schedule checks', e);
         return { ok: false, reason: 'error' };
-      });
+      });      await this.refreshDayView().catch((e) => console.warn('Could not update the Day View', e));
       await this.refreshAssignmentLists().catch((e) => console.warn('Could not update the assignment dropdowns', e));
     }
     return { total: assignments.length, violations, marked: marks.length, liveChecks: live };

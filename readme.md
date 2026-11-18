@@ -39,6 +39,12 @@ The Schedule tab is coloured by division (10 colours, looked up from the Soldier
 
 Cooldown means the rest needed after finishing a shift of a post: the gap before the next shift must be at least the cooldown of the earlier shift's post. Both shifts of the pair are flagged. The helper formulas are checked in the unit tests with a spreadsheet engine against the app's rule engine on random schedules.
 
+### Day View
+
+After a schedule is saved the spreadsheet gets a **Day View** tab: pick a day in the dropdown in cell B1 and the table shows just that day, instantly, with formulas (no app needed). Shifts are repeated on every row they cover, so a night shift that started the evening before still shows at the top of the next day. In the app, **Scheduler -> Day in Sheets** builds the tab if needed and opens it on the day you are looking at. The tab is built the first time you press *Day in Sheets* (or *Update whole spreadsheet*); after that every save and *Check schedule* keep it up to date (it keeps your selected day). It is not built by a plain save, because it is thousands of formulas; if you change a post's shift length by hand, press *Check schedule*. Days are identified as `yyyy-mm-dd` so the dropdown means the same day in every spreadsheet locale.
+
+**Getting around a long schedule (100 days and more):** the Schedule tab's frozen corner cell is a link, *Date ▸ jump to a day*, that takes you to a clickable list of every day in the Day View; one click lands on the first row of that day in the Schedule tab. The Day View also has an *Open <day> in the Schedule tab* link next to the dropdown. Every day also gets a Name Box shortcut (`Day_2025_03_10`): type it in the box left of the formula bar, or pick it from the dropdown there, to select that day's rows. In the app, **Scheduler -> Edit in Sheets** opens the Schedule tab at the day on screen. The Name Box shortcuts are rebuilt on every save (they cost nothing); the clickable day list and the corner link come with the Day View, once it has been built.
+
 ### Assigning by hand
 
 Every save builds the whole saved day as a grid of **merged shift blocks, filled or empty**: each post role has its own column and every shift slot is merged to the post's shift length, so picking a name in an empty slot fills the whole shift with no manual merging. Empty slots are lightly shaded so unfilled ones stand out.
@@ -47,7 +53,7 @@ Each slot has its **own dropdown listing everyone, best fit first**, ordered by 
 
 ### Updating an existing spreadsheet
 
-Open **Settings -> Spreadsheet health -> Update whole spreadsheet** (after a confirmation). In one step it adds any missing tabs and columns, formats the Soldiers, Posts and Unavailabilities tabs for editing, and rebuilds the Schedule tab with the division colours, the soldier dropdown, the live double-booking checks. It never changes your data: every row and every saved assignment is written back exactly as it was, your own dropdown / formatting rules / named ranges are kept, and it can be run as often as you like. The same things also happen automatically whenever you save a schedule.
+Open **Settings -> Spreadsheet health -> Update whole spreadsheet** (after a confirmation). In one step it adds any missing tabs and columns, formats the Soldiers, Posts and Unavailabilities tabs for editing, and rebuilds the Schedule tab with the division colours, the soldier dropdown, the live double-booking checks, the Day View and the jump links. It never changes your data: every row and every saved assignment is written back exactly as it was, your own dropdown / formatting rules / named ranges are kept, and it can be run as often as you like. The same things also happen automatically whenever you save a schedule.
 
 ### Tests
 
@@ -79,11 +85,12 @@ Pushes to `master` run the tests, build the app and deploy it to GitHub Pages (`
 
 ## Speed
 
-Everything the spreadsheet calculates by itself (the live double-booking colours) is a formula, and a lot of formulas make a spreadsheet slow, especially in the phone app. So the app keeps them within a budget:
+Everything the spreadsheet calculates by itself (live double-booking colours, the Day View) is a formula, and a lot of formulas make a spreadsheet slow, especially in the phone app. So the app keeps them within a budget:
 
 - the live checks cover the most recent rows only, at most about 9,000 helper formulas (a schedule with 12 columns checks about 250 rows, 24 columns about 125; narrower ones up to 336); older days are covered by *Check schedule*, which uses no formulas at all;
 - the red/amber colours are applied to exactly the checked block, not the whole sheet;
-- if the spreadsheet still feels slow, delete the **Schedule Check** tab: the Schedule tab and all data keep working, and *Check schedule* in the app still marks every problem with a note.
+- the Day View is built only when you ask for it, and is limited to about 12,000 helper formulas;
+- if the spreadsheet still feels slow, delete the **Schedule Check** and **Day View** tabs: the Schedule tab and all data keep working, and *Check schedule* in the app still marks every problem with a note.
 
 ## Google sign-in
 
